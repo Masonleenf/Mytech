@@ -1,0 +1,334 @@
+[
+    {
+        "saa_class": "국내채권",
+        "taa_class": "특수채"
+    },
+    {
+        "saa_class": "국내주식",
+        "taa_class": "2차전지"
+    },
+    {
+        "saa_class": "국내주식",
+        "taa_class": "기타"
+    },
+    {
+        "saa_class": "국내주식",
+        "taa_class": "AI(온디바이스)"
+    },
+    {
+        "saa_class": "국내주식",
+        "taa_class": "Index(Beta 투자)"
+    },
+    {
+        "saa_class": "국내주식",
+        "taa_class": "바이오"
+    },
+    {
+        "saa_class": "국내주식",
+        "taa_class": "AI(반도체)"
+    },
+    {
+        "saa_class": "국내주식",
+        "taa_class": "Strategy-배당"
+    },
+    {
+        "saa_class": "국내주식",
+        "taa_class": "금융업"
+    },
+    {
+        "saa_class": "국내채권",
+        "taa_class": "회사채"
+    },
+    {
+        "saa_class": "국내주식",
+        "taa_class": "AI(로봇)"
+    },
+    {
+        "saa_class": "대체투자",
+        "taa_class": "금리"
+    },
+    {
+        "saa_class": "국내주식",
+        "taa_class": "ESG"
+    },
+    {
+        "saa_class": "국내주식",
+        "taa_class": "신재생에너지"
+    },
+    {
+        "saa_class": "국내주식",
+        "taa_class": "미디어"
+    },
+    {
+        "saa_class": "국내채권",
+        "taa_class": "장기채권"
+    },
+    {
+        "saa_class": "대체투자",
+        "taa_class": "사모(TDF)"
+    },
+    {
+        "saa_class": "대체투자",
+        "taa_class": "사모(헤지펀드)"
+    },
+    {
+        "saa_class": "국내주식",
+        "taa_class": "가치주"
+    },
+    {
+        "saa_class": "국내주식",
+        "taa_class": "메타버스"
+    },
+    {
+        "saa_class": "국내주식",
+        "taa_class": "게임/콘텐츠"
+    },
+    {
+        "saa_class": "국내채권",
+        "taa_class": "단기채권"
+    },
+    {
+        "saa_class": "국내채권",
+        "taa_class": "국채종합"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "신재생에너지"
+    },
+    {
+        "saa_class": "대체투자",
+        "taa_class": "SOC"
+    },
+    {
+        "saa_class": "대체투자",
+        "taa_class": "Index(Beta 투자)"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "비만치료제"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "에너지"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "Index(Beta 투자)"
+    },
+    {
+        "saa_class": "국내채권",
+        "taa_class": "금융채"
+    },
+    {
+        "saa_class": "해외채권",
+        "taa_class": "장기채권"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "AI(All)"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "Strategy-배당"
+    },
+    {
+        "saa_class": "해외채권",
+        "taa_class": "회사채"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "금융업"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "로봇"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "버크셔포트"
+    },
+    {
+        "saa_class": "국내주식",
+        "taa_class": "반도체"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "인도-Index"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "중국-Index"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "테슬라고정테크"
+    },
+    {
+        "saa_class": "대체투자",
+        "taa_class": "원자재"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "팔란티어고정테크"
+    },
+    {
+        "saa_class": "국내주식",
+        "taa_class": "소비재"
+    },
+    {
+        "saa_class": "국내주식",
+        "taa_class": "산업재"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "반도체"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "원자재"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "ESG"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "AI(온디바이스)"
+    },
+    {
+        "saa_class": "대체투자",
+        "taa_class": "농산물"
+    },
+    {
+        "saa_class": "국내주식",
+        "taa_class": "에너지"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "방산"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "일본-Index"
+    },
+    {
+        "saa_class": "국내주식",
+        "taa_class": "밸류업"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "사이버보안"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "바이오"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "클라우드"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "신흥국-Index"
+    },
+    {
+        "saa_class": "해외채권",
+        "taa_class": "단기채권"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "소비재"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "가치주"
+    },
+    {
+        "saa_class": "대체투자",
+        "taa_class": "통화"
+    },
+    {
+        "saa_class": "국내주식",
+        "taa_class": "자동차"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "전기차"
+    },
+    {
+        "saa_class": "국내주식",
+        "taa_class": "방산"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "메타버스"
+    },
+    {
+        "saa_class": "국내채권",
+        "taa_class": "ESG"
+    },
+    {
+        "saa_class": "국내주식",
+        "taa_class": "로봇"
+    },
+    {
+        "saa_class": "대체투자",
+        "taa_class": "부동산"
+    },
+    {
+        "saa_class": "국내채권",
+        "taa_class": "Index(Beta 투자)"
+    },
+    {
+        "saa_class": "국내주식",
+        "taa_class": "Strategy-퀄리티"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "밸류업"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "AI(로봇)"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "양자컴퓨터"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "천연가스"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "2차전지"
+    },
+    {
+        "saa_class": "국내주식",
+        "taa_class": "AI(All)"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "AI(반도체)"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "러시아"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "미디어"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "베트남-Index"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "로보택시"
+    },
+    {
+        "saa_class": "해외주식",
+        "taa_class": "테크종합"
+    }
+]
