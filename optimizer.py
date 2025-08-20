@@ -168,7 +168,7 @@ def safe_optimize_with_constraints(mu, S, selected_tickers, target_return, risk_
 
     
     # 경계 조건 (0 <= 가중치 <= 1)
-    bounds = [(0, 1) for _ in range(n)]
+    bounds = [(0.05, 0.65) for _ in range(n)]
     
     # 목적함수 정의
     if objective == "max_sharpe":
