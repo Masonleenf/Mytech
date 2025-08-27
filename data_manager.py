@@ -31,6 +31,7 @@ def convert_csv_to_master_json():
 
         # --- 데이터 전처리 ---
         df.rename(columns={'saaclass': 'saa_class', 'taaclass': 'taa_class'}, inplace=True)
+        df['단축코드'] = df['단축코드'].astype(str).str.zfill(6)
         df['ticker'] = df['단축코드'].astype(str).str.zfill(6) + '.KS'
         df['상장일'] = pd.to_datetime(df['상장일'], errors='coerce')
         df = df.dropna(subset=['상장일', 'saa_class', 'taa_class'])
