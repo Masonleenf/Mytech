@@ -22,17 +22,19 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run data manager script
-        run: python data_manager.py
+      - name: Run data scripts # 💡 단계 이름을 좀 더 명확하게 바꿨습니다.
+        run: |
+          python data_manager.py
+          python ecos_main.py   # ✨ 이 줄을 추가하세요.
 
       - name: Commit and push changes
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add data/
+          git add data/ # 만약 ecos_main.py가 다른 폴더를 변경한다면 git add에 해당 경로도 추가해야 합니다.
           # 변경 사항이 있을 때만 커밋하도록 설정
           if ! git diff --staged --quiet; then
-            git commit -m " chore: Auto-update ETF data"
+            git commit -m " chore: Auto-update ETF and ECOS data" # 커밋 메시지도 업데이트했습니다.
             git push
           else
             echo "No changes to commit."
