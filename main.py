@@ -5,6 +5,7 @@ import backtester
 import json
 import os
 import pandas as pd
+from datetime import datetime
 
 app = Flask(__name__)
 CORS(app)
@@ -12,6 +13,159 @@ CORS(app)
 DATA_DIR = "data"
 PRICE_DATA_DIR = os.path.join(DATA_DIR, "fund_prices")
 MASTER_FILE_PATH = os.path.join(DATA_DIR, "etf_master.json")
+ECOS_DATA_PATH = os.path.join(DATA_DIR, "ecos_data.json")  # ECOS 데이터 경로 추가
+
+def load_ecos_data():
+    """ECOS 데이터 로드"""
+    try:
+        if not os.path.exists(ECOS_DATA_PATH):
+            print(f"❌ ECOS 데이터 파일이 없습니다: {ECOS_DATA_PATH}")
+            return {}
+        
+        with open(ECOS_DATA_PATH, 'r', encoding='utf-8') as f:
+            ecos_data = json.load(f)
+        
+        print(f"✅ ECOS 데이터 로드 완료: {len(ecos_data)}개 통계")
+        return ecos_data
+    
+    except Exception as e:
+        print(f"❌ ECOS 데이터 로드 실패: {e}")
+        return {}
+
+def get_latest_market_data(stat_code, item_code1, ecos_data):
+    """특정 통계의 최신 2일 데이터 조회"""
+    try:
+        key = f"{stat_code}_{item_code1}"
+        
+        if key not in ecos_data or not ecos_data[key]['data']:
+            return None
+        
+        data_list = ecos_data[key]['data']
+        stat_info = ecos_data[key]['info']
+        
+        # 날짜순으로 정렬하고 최신 2개 데이터 가져오기
+        sorted_data = sorted(data_list, key=lambda x: x['TIME'])
+        
+        if len(sorted_data) < 1:
+            return None
+        
+        latest = sorted_data[-1]
+        previous = sorted_data[-2] if len(sorted_data) >= 2 else None
+        
+        current_value = float(latest['DATA_VALUE'])
+        previous_value = float(previous['DATA_VALUE']) if previous else current_value
+        
+        # 변화량 및 변화율 계산
+        change = current_value - previous_value
+        change_percent = (change / previous_value * 100) if previous_value != 0 else 0
+        
+        # 트렌드 결정
+        if change > 0:
+            trend = 'up'
+        elif change < 0:
+            trend = 'down'
+        else:
+            trend = 'neutral'
+        
+        return {
+            'name': stat_info['name'],
+            'value': str(current_value),
+            'change': f"{change:+.2f}",
+            'changePercent': f"{change_percent:+.2f}%",
+            'trend': trend,
+            'unit': stat_info.get('unit', ''),
+            'lastUpdated': latest['TIME'],
+            'stat_code': stat_code,
+            'item_code1': item_code1
+        }
+        
+    except Exception as e:
+        print(f"시장 데이터 조회 오류 ({stat_code}_{item_code1}): {e}")
+        return None
+
+def format_market_indicators():
+    """시장지표 데이터를 프런트엔드 형식으로 변환"""
+    ecos_data = load_ecos_data()
+    
+    if not ecos_data:
+        return {
+            'interest_rates': [],
+            'stock_indices': [],
+            'exchange_rates': []
+        }
+    
+    # 주요 시장지표 매핑 (stat_code, item_code1)
+    market_indicators = {
+        'interest_rates': [
+            ('817Y002', 10101000, 'percent', '콜금리', '한국은행 기준금리'),
+            ('817Y002', 10150000, 'percent', 'KORIBOR 3M', '3개월 금리'),
+            ('817Y002', 10190000, 'percent', '국고채(1년)', '1년 국채 수익률'),
+            ('817Y002', 10195000, 'percent', '국고채(2년)', '2년 국채 수익률'),
+            ('817Y002', 10200000, 'percent', '국고채(3년)', '3년 국채 수익률'),
+            ('817Y002', 10200001, 'percent', '국고채(5년)', '5년 국채 수익률'),
+            ('817Y002', 10210000, 'percent', '국고채(10년)', '10년 국채 수익률'),
+            ('817Y002', 10220000, 'percent', '국고채(20년)', '20년 국채 수익률'),
+            ('817Y002', 10230000, 'percent', '국고채(30년)', '30년 국채 수익률'),
+            ('817Y002', 10240000, 'percent', '국고채(50년)', '50년 국채 수익률'),
+            ('817Y002', 10300000, 'percent', '회사채(3년, AA-)', 'AA- 회사채'),
+            ('817Y002', 10320000, 'percent', '회사채(3년, BBB-)', 'BBB-` 회사채'),
+        ],
+        'stock_indices': [
+            ('802Y001', 1000, 'trending-up', 'KOSPI', '코스피 지수'),
+            ('802Y001', 89000, 'trending-up', 'KOSDAQ', '코스닥 지수'),
+        ],
+        'exchange_rates': [
+            ('731Y001', 1, 'dollar-sign', 'USD/KRW', '미국달러'),
+            ('731Y001', 53, 'dollar-sign', 'CNY/KRW', '위안'),
+            ('731Y001', 2, 'dollar-sign', 'JPY/KRW', '엔화(100)'),
+            ('731Y001', 3, 'dollar-sign', 'EUR/KRW', '유로'),
+            ('731Y001', 12, 'dollar-sign', 'GBP/KRW', '파운드'),
+            ('731Y001', 13, 'dollar-sign', 'CAD/KRW', '캐나다달러'),
+            ('731Y001', 17, 'dollar-sign', 'AUD/KRW', '호주달러'),
+        ]
+    }
+    
+    result = {}
+    
+    for category, indicators in market_indicators.items():
+        category_data = []
+        
+        for stat_code, item_code1, icon_type, display_name, description in indicators:
+            data = get_latest_market_data(stat_code, item_code1, ecos_data)
+            
+            if data:
+                # 표시 형식 조정
+                if category == 'interest_rates':
+                    # 금리는 % 표시
+                    value_display = f"{float(data['value']):.2f}%"
+                    change_display = f"{float(data['change']):+.2f}%p"
+                elif category == 'stock_indices':
+                    # 주가지수는 소수점 1자리
+                    value_display = f"{float(data['value']):,.1f}"
+                    change_display = f"{float(data['change']):+.1f}"
+                else:  # exchange_rates
+                    # 환율은 소수점 2자리
+                    value_display = f"{float(data['value']):,.2f}원"
+                    change_display = f"{float(data['change']):+.1f}"
+                
+                formatted_data = {
+                    'id': f"{stat_code}_{item_code1}",
+                    'icon': icon_type,  # 프런트엔드에서 아이콘 매핑용
+                    'name': display_name,
+                    'description': description,
+                    'value': value_display,
+                    'change': change_display,
+                    'changePercent': data['changePercent'],
+                    'trend': data['trend'],
+                    'unit': data.get('unit', ''),
+                    'lastUpdated': data['lastUpdated']
+                }
+                
+                category_data.append(formatted_data)
+        
+        result[category] = category_data
+    
+    return result
 
 def get_file_size(ticker):
     """주어진 티커의 CSV 데이터 파일 크기를 확인합니다."""
@@ -74,6 +228,152 @@ def health_check():
     """서버 상태 확인 엔드포인트"""
     return jsonify({"status": "healthy", "message": "API 서버가 정상 작동 중입니다."}), 200
 
+# ===== 시장지표 관련 API =====
+@app.route('/api/market-indicators', methods=['GET'])
+def get_market_indicators():
+    """전체 시장지표 조회"""
+    try:
+        indicators = format_market_indicators()
+        
+        return jsonify({
+            "status": "success",
+            "data": indicators,
+            "timestamp": datetime.now().isoformat()
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            "status": "error", 
+            "message": f"시장지표 조회 중 오류 발생: {str(e)}"
+        }), 500
+
+@app.route('/api/market-indicators/<category>', methods=['GET'])
+def get_market_indicators_by_category(category):
+    """카테고리별 시장지표 조회"""
+    try:
+        valid_categories = ['interest_rates', 'stock_indices', 'exchange_rates']
+        
+        if category not in valid_categories:
+            return jsonify({
+                "status": "error", 
+                "message": f"유효하지 않은 카테고리입니다. 사용 가능: {', '.join(valid_categories)}"
+            }), 400
+        
+        indicators = format_market_indicators()
+        
+        return jsonify({
+            "status": "success",
+            "category": category,
+            "data": indicators.get(category, []),
+            "timestamp": datetime.now().isoformat()
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            "status": "error", 
+            "message": f"{category} 시장지표 조회 중 오류 발생: {str(e)}"
+        }), 500
+
+@app.route('/api/market-indicators/summary', methods=['GET'])
+def get_market_indicators_summary():
+    """주요 시장지표 요약 (상단 카드용)"""
+    try:
+        indicators = format_market_indicators()
+        
+        # 주요 지표만 선별 (상단 카드용)
+        summary_items = []
+        
+        # 콜금리
+        if indicators['interest_rates']:
+            for item in indicators['interest_rates']:
+                if '콜금리' in item['name']:
+                    summary_items.append({
+                        'name': '콜금리',
+                        'value': item['value'],
+                        'change': item['change'],
+                        'changePercent': item['changePercent'],
+                        'trend': item['trend']
+                    })
+                    break
+        
+        # USD/KRW
+        if indicators['exchange_rates']:
+            for item in indicators['exchange_rates']:
+                if 'USD/KRW' in item['name']:
+                    summary_items.append({
+                        'name': 'USD/KRW',
+                        'value': item['value'],
+                        'change': item['change'],
+                        'changePercent': item['changePercent'],
+                        'trend': item['trend']
+                    })
+                    break
+        
+        # KOSPI
+        if indicators['stock_indices']:
+            for item in indicators['stock_indices']:
+                if 'KOSPI' in item['name']:
+                    summary_items.append({
+                        'name': 'KOSPI',
+                        'value': item['value'],
+                        'change': item['change'],
+                        'changePercent': item['changePercent'],
+                        'trend': item['trend']
+                    })
+                    break
+        
+        # 국고채 3Y
+        if indicators['interest_rates']:
+            for item in indicators['interest_rates']:
+                if '국고채 3Y' in item['name']:
+                    summary_items.append({
+                        'name': '국고채3Y',
+                        'value': item['value'],
+                        'change': item['change'],
+                        'changePercent': item['changePercent'],
+                        'trend': item['trend']
+                    })
+                    break
+        
+        # KOSDAQ
+        if indicators['stock_indices']:
+            for item in indicators['stock_indices']:
+                if 'KOSDAQ' in item['name']:
+                    summary_items.append({
+                        'name': 'KOSDAQ',
+                        'value': item['value'],
+                        'change': item['change'],
+                        'changePercent': item['changePercent'],
+                        'trend': item['trend']
+                    })
+                    break
+        
+        # EUR/KRW
+        if indicators['exchange_rates']:
+            for item in indicators['exchange_rates']:
+                if 'EUR/KRW' in item['name']:
+                    summary_items.append({
+                        'name': 'EUR/KRW',
+                        'value': item['value'],
+                        'change': item['change'],
+                        'changePercent': item['changePercent'],
+                        'trend': item['trend']
+                    })
+                    break
+        
+        return jsonify({
+            "status": "success",
+            "data": summary_items[:6],  # 최대 6개
+            "timestamp": datetime.now().isoformat()
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            "status": "error", 
+            "message": f"시장지표 요약 조회 중 오류 발생: {str(e)}"
+        }), 500
+
+# ===== 기존 ETF 관련 API =====
 @app.route('/api/assets', methods=['GET'])
 def get_assets_endpoint():
     """프론트엔드에 보여줄 자산(ETF) 목록 전체를 반환합니다."""
@@ -227,4 +527,16 @@ def optimize_endpoint():
         return jsonify({"status": "error", "message": f"최적화 중 서버 오류 발생: {e}"}), 500
 
 if __name__ == '__main__':
+    print("=== Flask 서버 시작 ===")
+    print(f"데이터 디렉토리: {DATA_DIR}")
+    print(f"ECOS 데이터 파일: {ECOS_DATA_PATH}")
+    print(f"ETF 마스터 파일: {MASTER_FILE_PATH}")
+    
+    # 시작 시 ECOS 데이터 로드 테스트
+    ecos_data = load_ecos_data()
+    if ecos_data:
+        print(f"✅ ECOS 데이터 준비 완료: {len(ecos_data)}개 통계")
+    else:
+        print("⚠️  ECOS 데이터가 없습니다. ecos_main.py를 먼저 실행하세요.")
+    
     app.run(host='0.0.0.0', port=8000, debug=True)

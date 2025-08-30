@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 class ECOSDataManager:
-    def __init__(self, api_key, data_dir="./"):
+    def __init__(self, api_key, data_dir="./data"):
         """
         한국은행 ECOS 데이터 관리 클래스
         
