@@ -9,7 +9,7 @@ from pathlib import Path
 class ECOSDataManager:
     def __init__(self, api_key, data_dir="./data"):
         """
-        한국은행 ECOS 데이터 관리 클래스
+        한국은행 ECOS 데이터 관리 클래스 (개별 CSV 파일 저장 방식)
         
         Args:
             api_key (str): 한국은행 API 키
@@ -18,8 +18,13 @@ class ECOSDataManager:
         self.api_key = api_key
         self.base_url = "https://ecos.bok.or.kr/api"
         self.data_dir = Path(data_dir)
-        self.data_file = self.data_dir / "ecos_data.json"
+        
+        # CSV 파일 저장 경로 (data_manager.py와 유사한 구조)
+        self.price_data_dir = self.data_dir / "ecos_prices"
         self.list_file = self.data_dir / "list.csv"
+        
+        # 폴더 생성
+        self.price_data_dir.mkdir(parents=True, exist_ok=True)
         
         # API 호출 제한 (1초당 1회)
         self.last_request_time = 0
@@ -46,19 +51,19 @@ class ECOSDataManager:
             max_retries (int): 최대 재시도 횟수
             
         Returns:
-            dict: API 응답 데이터
+            list: API 응답 데이터 리스트 또는 None
         """
-        # 주기 형식 변환 (기존 코드 그대로 유지)
+        # 주기 형식 변환
         cycle_mapping = {'D': 'D', 'M': 'M', 'Q': 'QQ', 'A': 'YY'}
-        api_cycle = cycle_mapping.get(cycle.upper(), 'DD')
+        api_cycle = cycle_mapping.get(cycle.upper(), 'D')
         
-        # 통계표별 항목코드 포맷팅 규칙 (기존 코드 그대로 유지)
+        # 통계표별 항목코드 포맷팅 규칙
         if stat_code == '817Y002':  # 금리
             formatted_item_code = f"0{str(item_code1).zfill(8)}"
         elif stat_code == '802Y001':  # 주가지수
-            formatted_item_code = f"0{str(item_code1).zfill(6)}"  # 7자리로 포맷팅 (0001000)
+            formatted_item_code = f"0{str(item_code1).zfill(6)}"
         elif stat_code == '731Y001':  # 환율
-            formatted_item_code = f"0{str(item_code1).zfill(6)}"  # 7자리로 포맷팅 (0000013)
+            formatted_item_code = f"0{str(item_code1).zfill(6)}"
         else:
             formatted_item_code = f"0{str(item_code1).zfill(6)}"
         
@@ -109,7 +114,7 @@ class ECOSDataManager:
     
     def load_statistics_list(self):
         """
-        list.csv에서 통계 목록 로드
+        list.csv에서 통계 목록 로드 (일별 데이터만)
         
         Returns:
             list: 통계 정보 리스트
@@ -122,6 +127,10 @@ class ECOSDataManager:
             
             statistics = []
             for _, row in df.iterrows():
+                # 일별 데이터만 처리 (period가 'D'인 것만)
+                if str(row['period']).strip().upper() != 'D':
+                    continue
+                    
                 stat_info = {
                     'stat_code': str(row['stat_code']).strip(),
                     'item_code1': int(row['item_code1']),
@@ -131,208 +140,122 @@ class ECOSDataManager:
                 }
                 statistics.append(stat_info)
             
-            print(f"📋 통계 목록 로드 완료: {len(statistics)}개")
+            print(f"📋 일별 통계 목록 로드 완료: {len(statistics)}개")
             return statistics
             
         except Exception as e:
             print(f"❌ list.csv 로드 실패: {e}")
             return []
     
-    def load_existing_data(self):
-        """
-        기존 JSON 데이터 로드
-        
-        Returns:
-            dict: 기존 데이터
-        """
-        if self.data_file.exists():
-            try:
-                with open(self.data_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                print(f"📂 기존 데이터 로드: {len(data)}개 통계")
-                return data
-            except Exception as e:
-                print(f"❌ 기존 데이터 로드 실패: {e}")
-                
-        return {}
+    def get_csv_file_path(self, item_code1):
+        """CSV 파일 경로 생성"""
+        return self.price_data_dir / f"{item_code1}.csv"
     
-    def save_data(self, data):
+    def get_latest_date_from_csv(self, csv_file_path):
         """
-        데이터를 JSON 파일로 저장
+        CSV 파일에서 최신 날짜 추출
         
         Args:
-            data (dict): 저장할 데이터
-        """
-        try:
-            with open(self.data_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            
-            print(f"💾 데이터 저장 완료: {self.data_file}")
-            
-        except Exception as e:
-            print(f"❌ 데이터 저장 실패: {e}")
-    
-    def get_date_range(self, stat_code, period='D'):
-        """
-        통계별 적절한 시작일자 결정
-        
-        Args:
-            stat_code (str): 통계표코드
-            period (str): 주기 (D=일간, M=월간, Q=분기, A=연간)
-            
-        Returns:
-            tuple: (시작일자, 종료일자)
-        """
-        # 주기에 따른 종료일자 형식
-        if period == 'M':  # 월간
-            end_date = datetime.now().strftime('%Y%m')
-        elif period == 'Q':  # 분기
-            end_date = datetime.now().strftime('%Y%m')
-        elif period == 'A':  # 연간
-            end_date = datetime.now().strftime('%Y')
-        else:  # 일간
-            end_date = datetime.now().strftime('%Y%m%d')
-        
-        # 통계별 시작일자 설정
-        start_dates = {
-            '817Y002': '19950101' if period == 'D' else '199501',  # 금리: 1995년부터
-            '817Y001': '19800104' if period == 'D' else '198001',  # 주가지수: 1980년부터  
-            '731Y001': '19950101' if period == 'D' else '199501',  # 환율: 1995년부터
-        }
-        
-        default_start = '20000101' if period == 'D' else '200001'
-        start_date = start_dates.get(stat_code, default_start)
-        
-        return start_date, end_date
-    
-    def get_latest_date(self, existing_data, stat_code, item_code1):
-        """
-        기존 데이터에서 최신 날짜 추출
-        
-        Args:
-            existing_data (dict): 기존 데이터
-            stat_code (str): 통계표코드
-            item_code1 (int): 항목코드1
+            csv_file_path (Path): CSV 파일 경로
             
         Returns:
             str: 최신 날짜 (YYYYMMDD) 또는 None
         """
-        key = f"{stat_code}_{item_code1}"
-        
-        if key in existing_data and existing_data[key]['data']:
-            dates = [item['TIME'] for item in existing_data[key]['data']]
-            latest_date = max(dates)
-            return latest_date
-        
-        return None
-    
-    def print_data_structure(self, data):
-        """데이터 구조 출력 (프런트엔드 연결용)"""
-        if not data:
-            print("📊 데이터 구조: 빈 데이터")
-            return
-            
-        print("\n" + "="*80)
-        print("📊 ECOS 데이터 구조 (프런트엔드 연결용)")
-        print("="*80)
-        
-        # 전체 구조 요약
-        print(f"📈 총 통계 개수: {len(data)}")
-        
-        # 통계표별 분류
-        stat_groups = {}
-        for key, info in data.items():
-            stat_code = info['info']['stat_code']
-            if stat_code not in stat_groups:
-                stat_groups[stat_code] = []
-            stat_groups[stat_code].append(info)
-        
-        print(f"📋 통계표 개수: {len(stat_groups)}")
-        for stat_code, items in stat_groups.items():
-            print(f"  - {stat_code}: {len(items)}개 항목")
-        
-        # 샘플 데이터 구조 출력
-        sample_key = list(data.keys())[0]
-        sample_data = data[sample_key]
-        
-        print(f"\n📝 샘플 데이터 구조 (키: {sample_key}):")
-        print("=" * 50)
-        
-        # 메타데이터 구조
-        print("🔹 메타데이터 구조:")
-        info_structure = {
-            "stat_code": sample_data['info']['stat_code'],
-            "item_code1": sample_data['info']['item_code1'], 
-            "name": sample_data['info']['name'],
-            "period": sample_data['info']['period'],
-            "unit": sample_data['info']['unit']
-        }
-        print(json.dumps(info_structure, ensure_ascii=False, indent=2))
-        
-        # 데이터 구조 (처음 1개만)
-        if sample_data['data']:
-            print("\n🔹 데이터 항목 구조:")
-            sample_row = sample_data['data'][0]
-            print(json.dumps(sample_row, ensure_ascii=False, indent=2))
-            
-            print(f"\n🔹 데이터 컬럼 설명:")
-            for col, value in sample_row.items():
-                print(f"  - {col}: {type(value).__name__} (예: {value})")
-        
-        # 전체 데이터 요약
-        print(f"\n📊 데이터 요약:")
-        print("-" * 60)
-        
-        total_records = 0
-        for key, info in data.items():
-            stat_info = info['info']
-            data_count = len(info['data'])
-            total_records += data_count
-            
-            if data_count > 0:
-                dates = [item['TIME'] for item in info['data']]
-                first_date = min(dates)
-                last_date = max(dates)
-                status = "✅"
-            else:
-                first_date = last_date = "-"
-                status = "❌"
+        try:
+            if not csv_file_path.exists():
+                return None
                 
-            print(f"• {stat_info['name'][:40]:40} | {data_count:5}건 | {first_date} ~ {last_date} | {status}")
+            df = pd.read_csv(csv_file_path)
+            if df.empty or 'Date' not in df.columns:
+                return None
+                
+            # 날짜 컬럼을 정렬해서 최신 날짜 찾기
+            df['Date'] = pd.to_datetime(df['Date'], format='%Y%m%d', errors='coerce')
+            df = df.dropna(subset=['Date'])
+            
+            if df.empty:
+                return None
+                
+            latest_date = df['Date'].max()
+            return latest_date.strftime('%Y%m%d')
+            
+        except Exception as e:
+            print(f"CSV 파일 날짜 확인 오류: {e}")
+            return None
+    
+    def save_data_to_csv(self, item_code1, stat_info, api_data, is_update=False):
+        """
+        API 데이터를 CSV 파일로 저장
         
-        print("-" * 60)
-        print(f"📊 총 레코드 수: {total_records:,}건")
-        
-        # JSON 파일 정보
-        if self.data_file.exists():
-            file_size = self.data_file.stat().st_size / (1024*1024)  # MB
-            file_time = datetime.fromtimestamp(self.data_file.stat().st_mtime)
-            print(f"💾 파일 크기: {file_size:.2f}MB")
-            print(f"🕒 마지막 수정: {file_time.strftime('%Y-%m-%d %H:%M:%S')}")
-        
-        print("=" * 80)
+        Args:
+            item_code1 (int): 항목코드1
+            stat_info (dict): 통계 정보
+            api_data (list): API에서 받은 데이터
+            is_update (bool): 업데이트 모드인지 여부
+        """
+        try:
+            csv_file_path = self.get_csv_file_path(item_code1)
+            
+            # API 데이터를 DataFrame으로 변환
+            new_df = pd.DataFrame(api_data)
+            
+            # 필요한 컬럼만 추출: 날짜, 값
+            new_df = new_df[['TIME', 'DATA_VALUE']].copy()
+            new_df.columns = ['Date', 'Close']
+            
+            # 데이터 타입 변환
+            new_df['Date'] = pd.to_datetime(new_df['Date'], format='%Y%m%d', errors='coerce')
+            new_df['Close'] = pd.to_numeric(new_df['Close'], errors='coerce')
+            
+            # 결측치 제거
+            new_df = new_df.dropna()
+            
+            # 날짜순 정렬
+            new_df = new_df.sort_values('Date')
+            
+            # 날짜를 다시 YYYYMMDD 문자열로 변환 (CSV 저장용)
+            new_df['Date'] = new_df['Date'].dt.strftime('%Y%m%d')
+            
+            if is_update and csv_file_path.exists():
+                # 기존 파일이 있으면 읽어서 병합
+                try:
+                    existing_df = pd.read_csv(csv_file_path)
+                    
+                    # 중복 제거하면서 병합
+                    combined_df = pd.concat([existing_df, new_df], ignore_index=True)
+                    combined_df = combined_df.drop_duplicates(subset=['Date'], keep='last')
+                    
+                    # 날짜순 정렬
+                    combined_df['Date'] = pd.to_datetime(combined_df['Date'], format='%Y%m%d')
+                    combined_df = combined_df.sort_values('Date')
+                    combined_df['Date'] = combined_df['Date'].dt.strftime('%Y%m%d')
+                    
+                    # 저장
+                    combined_df.to_csv(csv_file_path, index=False)
+                    print(f"    ➕ 기존 데이터 업데이트: {len(new_df)}건 추가")
+                    
+                except Exception as e:
+                    print(f"    ❌ 기존 파일 병합 실패: {e}")
+                    # 실패하면 새 파일로 저장
+                    new_df.to_csv(csv_file_path, index=False)
+            else:
+                # 새 파일로 저장
+                new_df.to_csv(csv_file_path, index=False)
+                print(f"    💾 새 파일 저장: {len(new_df)}건")
+            
+        except Exception as e:
+            print(f"    ❌ CSV 저장 실패: {e}")
     
     def run_auto_update(self):
-        """자동 업데이트 실행"""
-        print("🚀 한국은행 ECOS 자동 데이터 업데이트")
+        """자동 업데이트 실행 (개별 CSV 파일 방식)"""
+        print("🚀 한국은행 ECOS 자동 데이터 업데이트 (CSV 파일)")
         print("=" * 60)
         
-        # 통계 목록 로드
+        # 통계 목록 로드 (일별만)
         statistics = self.load_statistics_list()
         if not statistics:
             print("❌ 통계 목록을 로드할 수 없습니다.")
             return
-        
-        # 기존 데이터 확인
-        existing_data = self.load_existing_data()
-        is_initial_download = len(existing_data) == 0
-        
-        if is_initial_download:
-            print("🆕 ecos_data.json 없음 → 전체 데이터 다운로드")
-            update_only = False
-        else:
-            print("🔄 ecos_data.json 있음 → 증분 업데이트 (최신 날짜만)")
-            update_only = True
         
         total_stats = len(statistics)
         success_count = 0
@@ -345,19 +268,21 @@ class ECOSDataManager:
             stat_code = stat_info['stat_code']
             item_code1 = stat_info['item_code1']
             name = stat_info['name']
-            period = stat_info.get('period', 'D')  # 주기 정보 추출
             
             print(f"\n📊 [{idx}/{total_stats}] {name}")
             print(f"    📋 {stat_code} - {item_code1}")
             
-            # 키 생성
-            key = f"{stat_code}_{item_code1}"
+            csv_file_path = self.get_csv_file_path(item_code1)
             
-            # 날짜 범위 결정
-            if update_only:
-                latest_date = self.get_latest_date(existing_data, stat_code, item_code1)
+            # 시작 날짜 결정
+            start_date = "20240101"  # 요청사항: 2024-01-01부터
+            end_date = today
+            is_update = False
+            
+            # 기존 파일이 있으면 최신 날짜부터 업데이트
+            if csv_file_path.exists():
+                latest_date = self.get_latest_date_from_csv(csv_file_path)
                 if latest_date:
-                    # 영업일 차이 계산 (1영업일 이내면 스킵)
                     try:
                         latest_dt = datetime.strptime(latest_date, '%Y%m%d')
                         today_dt = datetime.strptime(today, '%Y%m%d')
@@ -366,23 +291,11 @@ class ECOSDataManager:
                         # 최신 데이터가 오늘과 같거나 이후면 스킵
                         if latest_date >= today:
                             print(f"    ✅ 이미 최신 데이터 (최종: {latest_date})")
-                            if key not in existing_data:
-                                existing_data[key] = {
-                                    'info': stat_info,
-                                    'data': [],
-                                    'last_updated': datetime.now().isoformat()
-                                }
                             success_count += 1
                             continue
                         # 1-3일 차이면 영업일 고려하여 스킵 (주말, 공휴일 고려)
                         elif date_diff <= 3 and date_diff >= 1:
                             print(f"    ✅ 영업일 기준 최신 (최종: {latest_date}, 차이: {date_diff}일)")
-                            if key not in existing_data:
-                                existing_data[key] = {
-                                    'info': stat_info,
-                                    'data': [],
-                                    'last_updated': datetime.now().isoformat()
-                                }
                             success_count += 1
                             continue
                     except:
@@ -391,51 +304,25 @@ class ECOSDataManager:
                     
                     # 다음 날부터 오늘까지 업데이트
                     next_date = (datetime.strptime(latest_date, '%Y%m%d') + timedelta(days=1)).strftime('%Y%m%d')
-                    start_date, end_date = next_date, today
+                    start_date = next_date
+                    is_update = True
                     print(f"    🔄 증분 업데이트: {start_date} ~ {end_date}")
                 else:
-                    # 기존 데이터 없으면 전체 수집
-                    start_date, end_date = self.get_date_range(stat_code, period)
                     print(f"    🆕 전체 수집: {start_date} ~ {end_date}")
             else:
-                # 전체 수집
-                start_date, end_date = self.get_date_range(stat_code, period)
-                print(f"    🔄 전체 수집: {start_date} ~ {end_date}")
+                print(f"    🆕 새 파일 생성: {start_date} ~ {end_date}")
             
             # API 호출
             try:
-                cycle = stat_info.get('period', 'D')  # 기본값: 일간
-                new_data = self._make_api_request(stat_code, item_code1, start_date, end_date, cycle)
+                api_data = self._make_api_request(stat_code, item_code1, start_date, end_date, 'D')
                 
-                if new_data:
-                    # 데이터 저장
-                    if key not in existing_data:
-                        existing_data[key] = {
-                            'info': stat_info,
-                            'data': [],
-                            'last_updated': datetime.now().isoformat()
-                        }
-                    
-                    if update_only and key in existing_data and existing_data[key]['data']:
-                        # 기존 데이터와 병합 (중복 제거)
-                        existing_dates = {item['TIME'] for item in existing_data[key]['data']}
-                        new_items = [item for item in new_data if item['TIME'] not in existing_dates]
-                        existing_data[key]['data'].extend(new_items)
-                        print(f"    ➕ 신규 데이터 추가: {len(new_items)}건")
-                        if len(new_items) > 0:
-                            update_count += 1
-                    else:
-                        # 전체 교체
-                        existing_data[key]['data'] = new_data
-                        print(f"    💾 데이터 저장: {len(new_data)}건")
-                        update_count += 1
-                    
-                    # 날짜순 정렬
-                    existing_data[key]['data'].sort(key=lambda x: x['TIME'])
-                    existing_data[key]['last_updated'] = datetime.now().isoformat()
-                    
+                if api_data:
+                    # CSV 파일로 저장
+                    self.save_data_to_csv(item_code1, stat_info, api_data, is_update)
                     success_count += 1
                     
+                    if is_update or not csv_file_path.exists():
+                        update_count += 1
                 else:
                     print(f"    ❌ 데이터 수집 실패")
                     error_count += 1
@@ -444,19 +331,16 @@ class ECOSDataManager:
                 print(f"    ❌ 예외 발생: {e}")
                 error_count += 1
         
-        # 결과 저장
-        if existing_data:
-            self.save_data(existing_data)
-        
         print("\n" + "=" * 60)
         print("📈 데이터 수집 완료")
         print(f"✅ 성공: {success_count}개")
         print(f"🔄 업데이트: {update_count}개")
         print(f"❌ 실패: {error_count}개")
-        print(f"📊 총 통계: {len(existing_data)}개")
+        print(f"📁 저장 경로: {self.price_data_dir}")
         
-        # 데이터 구조 출력
-        self.print_data_structure(existing_data)
+        # 생성된 파일 목록 출력
+        csv_files = list(self.price_data_dir.glob("*.csv"))
+        print(f"📊 총 CSV 파일 수: {len(csv_files)}개")
 
 def main():
     """메인 실행 함수"""
@@ -466,7 +350,7 @@ def main():
     # 데이터 매니저 초기화
     manager = ECOSDataManager(API_KEY)
     
-    print("🏦 한국은행 ECOS 자동 데이터 수집기")
+    print("🏦 한국은행 ECOS 자동 데이터 수집기 (CSV 버전)")
     print(f"📅 실행 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print()
     

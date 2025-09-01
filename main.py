@@ -6,51 +6,103 @@ import json
 import os
 import pandas as pd
 from datetime import datetime
+import glob
 
 app = Flask(__name__)
 CORS(app)
 
 DATA_DIR = "data"
 PRICE_DATA_DIR = os.path.join(DATA_DIR, "fund_prices")
+ECOS_PRICES_DIR = os.path.join(DATA_DIR, "ecos_prices")  # ECOS CSV 파일 경로
 MASTER_FILE_PATH = os.path.join(DATA_DIR, "etf_master.json")
-ECOS_DATA_PATH = os.path.join(DATA_DIR, "ecos_data.json")  # ECOS 데이터 경로 추가
+LIST_CSV_PATH = os.path.join(DATA_DIR, "list.csv")  # list.csv 경로
 
-def load_ecos_data():
-    """ECOS 데이터 로드"""
+def load_list_csv():
+    """list.csv 파일을 로드하여 item_code1과 통계 정보 매핑"""
     try:
-        if not os.path.exists(ECOS_DATA_PATH):
-            print(f"❌ ECOS 데이터 파일이 없습니다: {ECOS_DATA_PATH}")
+        if not os.path.exists(LIST_CSV_PATH):
+            print(f"❌ list.csv 파일이 없습니다: {LIST_CSV_PATH}")
             return {}
         
-        with open(ECOS_DATA_PATH, 'r', encoding='utf-8') as f:
-            ecos_data = json.load(f)
+        df = pd.read_csv(LIST_CSV_PATH)
+        df.columns = df.columns.str.strip()
         
-        print(f"✅ ECOS 데이터 로드 완료: {len(ecos_data)}개 통계")
-        return ecos_data
-    
+        # item_code1을 키로 하는 딕셔너리 생성
+        mapping = {}
+        for _, row in df.iterrows():
+            item_code1 = int(row['item_code1'])
+            mapping[item_code1] = {
+                'stat_code': str(row['stat_code']).strip(),
+                'name': str(row['name']).strip(),
+                'period': str(row['period']).strip(),
+                'unit': str(row['단위']).strip()
+            }
+        
+        print(f"✅ list.csv 로드 완료: {len(mapping)}개 통계")
+        return mapping
+        
     except Exception as e:
-        print(f"❌ ECOS 데이터 로드 실패: {e}")
+        print(f"❌ list.csv 로드 실패: {e}")
         return {}
 
-def get_latest_market_data(stat_code, item_code1, ecos_data):
-    """특정 통계의 최신 2일 데이터 조회"""
+def get_ecos_csv_data(item_code1):
+    """특정 item_code1의 CSV 파일에서 최신 2일 데이터 조회"""
     try:
-        key = f"{stat_code}_{item_code1}"
+        csv_file_path = os.path.join(ECOS_PRICES_DIR, f"{item_code1}.csv")
         
-        if key not in ecos_data or not ecos_data[key]['data']:
+        if not os.path.exists(csv_file_path):
             return None
         
-        data_list = ecos_data[key]['data']
-        stat_info = ecos_data[key]['info']
+        # CSV 파일 읽기 (Date, Close 컬럼)
+        df = pd.read_csv(csv_file_path)
         
-        # 날짜순으로 정렬하고 최신 2개 데이터 가져오기
-        sorted_data = sorted(data_list, key=lambda x: x['TIME'])
-        
-        if len(sorted_data) < 1:
+        if df.empty or 'Date' not in df.columns or 'Close' not in df.columns:
             return None
         
-        latest = sorted_data[-1]
-        previous = sorted_data[-2] if len(sorted_data) >= 2 else None
+        # 날짜 컬럼을 datetime으로 변환 후 정렬
+        df['Date'] = pd.to_datetime(df['Date'], format='%Y%m%d', errors='coerce')
+        df = df.dropna(subset=['Date', 'Close'])
+        df = df.sort_values('Date')
+        
+        if len(df) < 1:
+            return None
+        
+        # 최신 2개 데이터
+        latest_data = df.tail(2)
+        
+        latest = {
+            'TIME': latest_data.iloc[-1]['Date'].strftime('%Y%m%d'),
+            'DATA_VALUE': str(latest_data.iloc[-1]['Close'])
+        }
+        
+        previous = None
+        if len(latest_data) >= 2:
+            previous = {
+                'TIME': latest_data.iloc[-2]['Date'].strftime('%Y%m%d'),
+                'DATA_VALUE': str(latest_data.iloc[-2]['Close'])
+            }
+        
+        return latest, previous
+        
+    except Exception as e:
+        print(f"CSV 데이터 조회 오류 (item_code1: {item_code1}): {e}")
+        return None
+
+def get_latest_market_data(stat_code, item_code1, list_mapping):
+    """특정 통계의 최신 2일 데이터 조회 (CSV 파일 기반)"""
+    try:
+        # list.csv에서 통계 정보 조회
+        if item_code1 not in list_mapping:
+            return None
+        
+        stat_info = list_mapping[item_code1]
+        
+        # CSV 데이터 조회
+        csv_result = get_ecos_csv_data(item_code1)
+        if not csv_result:
+            return None
+        
+        latest, previous = csv_result
         
         current_value = float(latest['DATA_VALUE'])
         previous_value = float(previous['DATA_VALUE']) if previous else current_value
@@ -84,10 +136,10 @@ def get_latest_market_data(stat_code, item_code1, ecos_data):
         return None
 
 def format_market_indicators():
-    """시장지표 데이터를 프런트엔드 형식으로 변환"""
-    ecos_data = load_ecos_data()
+    """시장지표 데이터를 프런트엔드 형식으로 변환 (CSV 파일 기반)"""
+    list_mapping = load_list_csv()
     
-    if not ecos_data:
+    if not list_mapping:
         return {
             'interest_rates': [],
             'stock_indices': [],
@@ -108,7 +160,7 @@ def format_market_indicators():
             ('817Y002', 10230000, 'percent', '국고채(30년)', '30년 국채 수익률'),
             ('817Y002', 10240000, 'percent', '국고채(50년)', '50년 국채 수익률'),
             ('817Y002', 10300000, 'percent', '회사채(3년, AA-)', 'AA- 회사채'),
-            ('817Y002', 10320000, 'percent', '회사채(3년, BBB-)', 'BBB-` 회사채'),
+            ('817Y002', 10320000, 'percent', '회사채(3년, BBB-)', 'BBB- 회사채'),
         ],
         'stock_indices': [
             ('802Y001', 1000, 'trending-up', 'KOSPI', '코스피 지수'),
@@ -131,7 +183,7 @@ def format_market_indicators():
         category_data = []
         
         for stat_code, item_code1, icon_type, display_name, description in indicators:
-            data = get_latest_market_data(stat_code, item_code1, ecos_data)
+            data = get_latest_market_data(stat_code, item_code1, list_mapping)
             
             if data:
                 # 표시 형식 조정
@@ -325,7 +377,7 @@ def get_market_indicators_summary():
         # 국고채 3Y
         if indicators['interest_rates']:
             for item in indicators['interest_rates']:
-                if '국고채 3Y' in item['name']:
+                if '국고채(3년)' in item['name']:
                     summary_items.append({
                         'name': '국고채3Y',
                         'value': item['value'],
@@ -376,7 +428,7 @@ def get_market_indicators_summary():
 # ===== 기존 ETF 관련 API =====
 @app.route('/api/assets', methods=['GET'])
 def get_assets_endpoint():
-    """프론트엔드에 보여줄 자산(ETF) 목록 전체를 반환합니다."""
+    """프런트엔드에 보여줄 자산(ETF) 목록 전체를 반환합니다."""
     if not os.path.exists(MASTER_FILE_PATH):
         return jsonify({"status": "error", "message": "ETF 마스터 파일이 없습니다."}), 404
     with open(MASTER_FILE_PATH, 'r', encoding='utf-8') as f:
@@ -473,7 +525,7 @@ def optimize_endpoint():
         with open(MASTER_FILE_PATH, 'r', encoding='utf-8') as f:
             etf_df = pd.DataFrame(json.load(f))
         
-        # ★★★★★ [수정된 로직 시작] ★★★★★
+        # ☆☆☆☆☆ [수정된 로직 시작] ☆☆☆☆☆
         # 이제 티커 대신 합성 지수 'code'를 찾습니다.
         final_codes = set()
         
@@ -505,7 +557,7 @@ def optimize_endpoint():
 
         # 포트폴리오 최적화 실행 시 티커 리스트 대신 코드 리스트를 전달합니다.
         weights, performance = optimizer.get_optimized_portfolio(selected_codes, params)
-        # ★★★★★ [수정된 로직 끝] ★★★★★
+        # ☆☆☆☆☆ [수정된 로직 끝] ☆☆☆☆☆
 
         # 백테스팅 실행 (백테스터는 가중치 기반이므로 수정 필요 없음)
         backtesting_results = backtester.run_backtest(weights)
@@ -529,14 +581,19 @@ def optimize_endpoint():
 if __name__ == '__main__':
     print("=== Flask 서버 시작 ===")
     print(f"데이터 디렉토리: {DATA_DIR}")
-    print(f"ECOS 데이터 파일: {ECOS_DATA_PATH}")
+    print(f"ECOS 가격 데이터: {ECOS_PRICES_DIR}")
     print(f"ETF 마스터 파일: {MASTER_FILE_PATH}")
+    print(f"list.csv 파일: {LIST_CSV_PATH}")
     
     # 시작 시 ECOS 데이터 로드 테스트
-    ecos_data = load_ecos_data()
-    if ecos_data:
-        print(f"✅ ECOS 데이터 준비 완료: {len(ecos_data)}개 통계")
+    list_mapping = load_list_csv()
+    if list_mapping:
+        print(f"✅ ECOS 데이터 준비 완료: {len(list_mapping)}개 통계")
+        
+        # CSV 파일 개수 확인
+        csv_files = glob.glob(os.path.join(ECOS_PRICES_DIR, "*.csv"))
+        print(f"📊 ECOS CSV 파일: {len(csv_files)}개")
     else:
-        print("⚠️  ECOS 데이터가 없습니다. ecos_main.py를 먼저 실행하세요.")
+        print("⚠️ ECOS 데이터가 없습니다. ecos_main.py를 먼저 실행하세요.")
     
     app.run(host='0.0.0.0', port=8000, debug=True)
