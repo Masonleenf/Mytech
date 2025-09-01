@@ -188,9 +188,10 @@ def format_market_indicators():
             if data:
                 # 표시 형식 조정
                 if category == 'interest_rates':
-                    # 금리는 % 표시
+                    # 금리는 % 표시, 변화량은 bp(베이시스 포인트) 표시
                     value_display = f"{float(data['value']):.2f}%"
-                    change_display = f"{float(data['change']):+.2f}%p"
+                    change_bp = float(data['change']) * 100  # %를 bp로 변환 (1% = 100bp)
+                    change_display = f"{change_bp:+.0f}bp"
                 elif category == 'stock_indices':
                     # 주가지수는 소수점 1자리
                     value_display = f"{float(data['value']):,.1f}"
@@ -342,7 +343,7 @@ def get_market_indicators_summary():
                     summary_items.append({
                         'name': '콜금리',
                         'value': item['value'],
-                        'change': item['change'],
+                        'change': item['change'],  # 이미 bp로 포맷된 값
                         'changePercent': item['changePercent'],
                         'trend': item['trend']
                     })
@@ -381,7 +382,7 @@ def get_market_indicators_summary():
                     summary_items.append({
                         'name': '국고채3Y',
                         'value': item['value'],
-                        'change': item['change'],
+                        'change': item['change'],  # 이미 bp로 포맷된 값
                         'changePercent': item['changePercent'],
                         'trend': item['trend']
                     })
@@ -580,20 +581,36 @@ def optimize_endpoint():
 
 if __name__ == '__main__':
     print("=== Flask 서버 시작 ===")
-    print(f"데이터 디렉토리: {DATA_DIR}")
-    print(f"ECOS 가격 데이터: {ECOS_PRICES_DIR}")
-    print(f"ETF 마스터 파일: {MASTER_FILE_PATH}")
-    print(f"list.csv 파일: {LIST_CSV_PATH}")
     
-    # 시작 시 ECOS 데이터 로드 테스트
-    list_mapping = load_list_csv()
-    if list_mapping:
-        print(f"✅ ECOS 데이터 준비 완료: {len(list_mapping)}개 통계")
+    try:
+        # 필수 디렉토리 생성
+        os.makedirs(DATA_DIR, exist_ok=True)
+        os.makedirs(ECOS_PRICES_DIR, exist_ok=True)
         
-        # CSV 파일 개수 확인
-        csv_files = glob.glob(os.path.join(ECOS_PRICES_DIR, "*.csv"))
-        print(f"📊 ECOS CSV 파일: {len(csv_files)}개")
-    else:
-        print("⚠️ ECOS 데이터가 없습니다. ecos_main.py를 먼저 실행하세요.")
-    
-    app.run(host='0.0.0.0', port=8000, debug=True)
+        print(f"데이터 디렉토리: {DATA_DIR}")
+        print(f"ECOS 가격 데이터: {ECOS_PRICES_DIR}")
+        
+        # 시작 시 ECOS 데이터 로드 테스트 (에러가 나도 서버는 시작)
+        try:
+            if os.path.exists(LIST_CSV_PATH):
+                list_mapping = load_list_csv()
+                if list_mapping:
+                    print(f"✅ ECOS 데이터 준비 완료: {len(list_mapping)}개 통계")
+                    csv_files = glob.glob(os.path.join(ECOS_PRICES_DIR, "*.csv"))
+                    print(f"📊 ECOS CSV 파일: {len(csv_files)}개")
+                else:
+                    print("⚠️ ECOS 데이터 로드 실패")
+            else:
+                print("⚠️ list.csv 파일이 없습니다. ecos_main.py를 먼저 실행하세요.")
+        except Exception as e:
+            print(f"⚠️ ECOS 데이터 체크 중 에러 (무시하고 계속): {e}")
+        
+        print("🚀 Flask 서버 시작 중...")
+        app.run(host='0.0.0.0', port=8000, debug=False, threaded=True)
+        
+    except Exception as e:
+        print(f"❌ 서버 시작 실패: {e}")
+        import traceback
+        traceback.print_exc()
+        # 그래도 시도해보기
+        app.run(host='0.0.0.0', port=8000, debug=False)

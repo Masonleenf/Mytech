@@ -275,7 +275,7 @@ class ECOSDataManager:
             csv_file_path = self.get_csv_file_path(item_code1)
             
             # 시작 날짜 결정
-            start_date = "20240101"  # 요청사항: 2024-01-01부터
+            start_date = "20000101"  # 요청사항: 2024-01-01부터
             end_date = today
             is_update = False
             
