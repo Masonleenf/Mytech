@@ -8,6 +8,7 @@ import pandas as pd
 from datetime import datetime
 import glob
 
+
 app = Flask(__name__)
 CORS(app)
 
@@ -578,6 +579,80 @@ def optimize_endpoint():
         import traceback
         traceback.print_exc()
         return jsonify({"status": "error", "message": f"최적화 중 서버 오류 발생: {e}"}), 500
+
+
+@app.route('/api/risk-analysis', methods=['POST'])
+def calculate_comprehensive_risk_endpoint():
+    """VaR과 Shortfall Risk를 한번에 계산하는 통합 엔드포인트"""
+    data = request.get_json()
+    print("\n--- 종합 리스크 분석 요청 수신 ---")
+    print(f"요청 데이터: {data}")
+    
+    if not data or "asset_pairs" not in data or "optimization_params" not in data:
+        return jsonify({"status": "error", "message": "'asset_pairs'와 'optimization_params'가 모두 필요합니다."}), 400
+            
+    asset_pairs = data.get("asset_pairs")
+    params = data.get("optimization_params")
+
+    try:
+        with open(MASTER_FILE_PATH, 'r', encoding='utf-8') as f:
+            etf_df = pd.DataFrame(json.load(f))
+        
+        # 자산 조합을 통해 대표 코드 찾기
+        final_codes = set()
+        
+        for pair in asset_pairs:
+            saa = pair.get('saa_class')
+            taa = pair.get('taa_class')
+            
+            if not saa or not taa:
+                continue
+
+            matched_etf = etf_df[
+                (etf_df['saa_class'] == saa) & 
+                (etf_df['taa_class'] == taa)
+            ]
+            
+            if not matched_etf.empty:
+                code = matched_etf['code'].iloc[0]
+                final_codes.add(code)
+                print(f"조합 ['{saa}' - '{taa}'] 대표 코드: {code}")
+            else:
+                print(f"경고 : 조합 ['{saa}' - '{taa}']에 해당하는 ETF가 없습니다.")
+
+        selected_codes = sorted(list(final_codes))
+        print(f"선택된 최종 코드 목록: {selected_codes}")
+
+        if len(selected_codes) < 2:
+            return jsonify({"status": "error", "message": "유효한 대표 코드를 2개 이상 선택할 수 없습니다."}), 400
+
+        # VaR과 Shortfall Risk 모두 계산
+        print("=== VaR 계산 시작 ===")
+        var_results = optimizer.ValueAtRisk(selected_codes, params)
+        print(f"VaR 계산 완료: {var_results}")
+
+        print("=== Shortfall Risk 계산 시작 ===")
+        shortfall_results = optimizer.shortfallrisk(selected_codes, params)
+        print(f"Shortfall Risk 계산 완료: {shortfall_results}")
+        
+        # 응답 구조 수정: Flutter에서 직접 접근 가능하게
+        result = {
+            "selected_etfs": selected_codes,
+            "value_at_risk": var_results,
+            "shortfall_risk": shortfall_results
+        }
+        
+        print(f"=== 최종 응답 데이터 ===")
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return jsonify(result), 200
+        
+    except (ValueError, FileNotFoundError) as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": f"종합 리스크 분석 중 서버 오류 발생: {e}"}), 500
+
 
 if __name__ == '__main__':
     print("=== Flask 서버 시작 ===")
