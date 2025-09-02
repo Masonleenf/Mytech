@@ -7,6 +7,7 @@ import numpy as np
 from scipy.optimize import minimize
 from scipy.stats import norm
 import warnings
+import math
 
 # 경고 메시지 필터링
 warnings.filterwarnings('ignore', category=UserWarning, module='pypfopt')
@@ -460,57 +461,12 @@ def get_optimized_portfolio(selected_tickers, params):
         raise e
     
 
-def ValueAtRisk(selected_tickers, params):
+def ValueAtRisk(annual_return, annual_vol, risk_free_rate=0.02):
     """
-    safe_annualize_performance를 사용하여 VaR 계산
+    이미 계산된 연간 수익률과 변동성으로 VaR 계산
     정규분포 가정 하에 좌측 1%, 5%, 10% VaR 계산
     """
     try:
-        # 포트폴리오 최적화를 먼저 수행하여 가중치 얻기
-        weights, performance = get_optimized_portfolio(selected_tickers, params)
-        
-        # 가격 데이터 로드
-        all_prices = []
-        for ticker in selected_tickers:
-            file_path = os.path.join(PRICE_DATA_DIR, f"{ticker}.csv")
-            if os.path.exists(file_path):
-                try:
-                    df = pd.read_csv(
-                        file_path, 
-                        skiprows=3, 
-                        header=None,
-                        names=['Date', 'Close', 'High', 'Low', 'Open', 'Volume'],
-                        index_col='Date',
-                        parse_dates=True,
-                        on_bad_lines='skip'
-                    )
-                    
-                    df = df[df.index.notna()]
-                    df = df[~df.index.duplicated(keep='first')]
-                    df['Adj Close'] = df['Close']
-                    
-                    if not df.empty and 'Adj Close' in df.columns:
-                        price_series = df[['Adj Close']].rename(columns={'Adj Close': ticker})
-                        price_series = clean_price_data(price_series)
-                        
-                        if not price_series.empty:
-                            all_prices.append(price_series)
-                            
-                except Exception as e:
-                    print(f"⚠️  {ticker} 파일 읽기 오류: {str(e)}")
-        
-        if not all_prices:
-            raise FileNotFoundError("유효한 가격 데이터를 가진 ETF가 하나도 없습니다.")
-
-        price_df_cleaned = pd.concat(all_prices, axis=1, join='outer', sort=True)
-        price_df_cleaned = clean_price_data(price_df_cleaned)
-        price_df_cleaned = price_df_cleaned.dropna()
-        
-        # 포트폴리오 성과 계산
-        annual_return, annual_vol, sharpe = safe_annualize_performance(
-            price_df_cleaned, weights, params.get("risk_free_rate", 0.02)
-        )
-        
         # VaR 계산 (정규분포 가정)
         confidence_levels = [0.99, 0.95, 0.90]  # 1%, 5%, 10% VaR
         var_results = {}
@@ -520,14 +476,13 @@ def ValueAtRisk(selected_tickers, params):
             z_score = norm.ppf(1 - confidence)  # 좌측 꼬리 분위수
             
             # VaR = 기대수익률 + (Z-score × 변동성)
-            # 음수로 표현 (손실을 의미)
             var_1year = annual_return + z_score * annual_vol
             
             confidence_pct = int((1 - confidence) * 100)
             var_results[f"var_{confidence_pct}pct"] = {
                 "confidence_level": f"{confidence_pct}%",
                 "var_1year": round(var_1year * 100, 2),  # 백분율로 변환
-                "var_1year_display": f"{var_1year:.2%}"
+                "var_1year_display": f"{var_1year:.1%}"
             }
         
         return {
@@ -546,65 +501,20 @@ def ValueAtRisk(selected_tickers, params):
         }
 
 
-def shortfallrisk(selected_tickers, params):
+def shortfallrisk(annual_return, annual_vol, risk_free_rate=0.02):
     """
-    safe_annualize_performance를 사용하여 shortfall risk 계산
+    이미 계산된 연간 수익률과 변동성으로 shortfall risk 계산
     1년~20년 투자 시 손실확률 계산
     n년 투자시: return(mean)*n, vol(std)*sqrt(n)
     """
     try:
-        # 포트폴리오 최적화를 먼저 수행하여 가중치 얻기
-        weights, performance = get_optimized_portfolio(selected_tickers, params)
-        
-        # 가격 데이터 로드
-        all_prices = []
-        for ticker in selected_tickers:
-            file_path = os.path.join(PRICE_DATA_DIR, f"{ticker}.csv")
-            if os.path.exists(file_path):
-                try:
-                    df = pd.read_csv(
-                        file_path, 
-                        skiprows=3, 
-                        header=None,
-                        names=['Date', 'Close', 'High', 'Low', 'Open', 'Volume'],
-                        index_col='Date',
-                        parse_dates=True,
-                        on_bad_lines='skip'
-                    )
-                    
-                    df = df[df.index.notna()]
-                    df = df[~df.index.duplicated(keep='first')]
-                    df['Adj Close'] = df['Close']
-                    
-                    if not df.empty and 'Adj Close' in df.columns:
-                        price_series = df[['Adj Close']].rename(columns={'Adj Close': ticker})
-                        price_series = clean_price_data(price_series)
-                        
-                        if not price_series.empty:
-                            all_prices.append(price_series)
-                            
-                except Exception as e:
-                    print(f"⚠️  {ticker} 파일 읽기 오류: {str(e)}")
-        
-        if not all_prices:
-            raise FileNotFoundError("유효한 가격 데이터를 가진 ETF가 하나도 없습니다.")
-
-        price_df_cleaned = pd.concat(all_prices, axis=1, join='outer', sort=True)
-        price_df_cleaned = clean_price_data(price_df_cleaned)
-        price_df_cleaned = price_df_cleaned.dropna()
-        
-        # 포트폴리오 성과 계산
-        annual_return, annual_vol, sharpe = safe_annualize_performance(
-            price_df_cleaned, weights, params.get("risk_free_rate", 0.02)
-        )
-        
         # Shortfall Risk 계산 (1년~20년)
         shortfall_results = []
         
         for years in range(1, 21):
             # n년 투자 시 기대수익률과 변동성
             expected_return_n_years = annual_return * years
-            volatility_n_years = annual_vol * np.sqrt(years)
+            volatility_n_years = annual_vol * math.sqrt(years)
             
             # 손실확률 계산 (정규분포 가정)
             # P(수익률 < 0) = Φ((0 - μ) / σ)
@@ -626,6 +536,15 @@ def shortfallrisk(selected_tickers, params):
             "portfolio_annual_return": round(annual_return * 100, 2),
             "portfolio_annual_volatility": round(annual_vol * 100, 2),
             "shortfall_risk_by_years": shortfall_results
+        }
+        
+    except Exception as e:
+        print(f"Shortfall Risk 계산 오류: {str(e)}")
+        return {
+            "error": str(e),
+            "portfolio_annual_return": 0.0,
+            "portfolio_annual_volatility": 0.0,
+            "shortfall_risk_by_years": []
         }
         
     except Exception as e:

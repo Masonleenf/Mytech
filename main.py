@@ -626,16 +626,28 @@ def calculate_comprehensive_risk_endpoint():
         if len(selected_codes) < 2:
             return jsonify({"status": "error", "message": "유효한 대표 코드를 2개 이상 선택할 수 없습니다."}), 400
 
-        # VaR과 Shortfall Risk 모두 계산
+        # 1. 포트폴리오 최적화 한번만 수행
+        print("=== 포트폴리오 최적화 수행 ===")
+        weights, performance = optimizer.get_optimized_portfolio(selected_codes, params)
+        print(f"최적화 결과: {performance}")
+        
+        # 2. 최적화 결과에서 수익률과 변동성 추출
+        annual_return = performance['expected_annual_return']
+        annual_vol = performance['annual_volatility'] 
+        risk_free_rate = params.get("risk_free_rate", 0.02)
+        
+        print(f"연간 수익률: {annual_return:.4f}, 연간 변동성: {annual_vol:.4f}")
+        
+        # 3. 추출된 값으로 VaR과 Shortfall Risk 계산 (중복 계산 없음)
         print("=== VaR 계산 시작 ===")
-        var_results = optimizer.ValueAtRisk(selected_codes, params)
+        var_results = optimizer.ValueAtRisk(annual_return, annual_vol, risk_free_rate)
         print(f"VaR 계산 완료: {var_results}")
 
         print("=== Shortfall Risk 계산 시작 ===")
-        shortfall_results = optimizer.shortfallrisk(selected_codes, params)
+        shortfall_results = optimizer.shortfallrisk(annual_return, annual_vol, risk_free_rate)
         print(f"Shortfall Risk 계산 완료: {shortfall_results}")
         
-        # 응답 구조 수정: Flutter에서 직접 접근 가능하게
+        # 4. 응답 구조
         result = {
             "selected_etfs": selected_codes,
             "value_at_risk": var_results,
@@ -652,7 +664,7 @@ def calculate_comprehensive_risk_endpoint():
         import traceback
         traceback.print_exc()
         return jsonify({"status": "error", "message": f"종합 리스크 분석 중 서버 오류 발생: {e}"}), 500
-
+    
 
 if __name__ == '__main__':
     print("=== Flask 서버 시작 ===")
