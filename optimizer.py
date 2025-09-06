@@ -38,56 +38,130 @@ def clean_price_data(df):
     
     return df
 
-def safe_annualize_performance(returns_series, weights, risk_free_rate=0.02):
-    """안전한 포트폴리오 성과 연율화 계산"""
+def calculate_trimmed_mean_returns(price_data, trim_ratio=0.3):
+    """
+    🆕 새로운 함수: 상위/하위 30% 제거 후 평균 계산하는 Trimmed Mean 기대수익률
+    
+    Args:
+        price_data (pd.DataFrame): 가격 데이터
+        trim_ratio (float): 제거할 비율 (0.3 = 상위30% + 하위30% 제거)
+    
+    Returns:
+        pd.Series: 연율화된 기대수익률
+    """
     try:
-        # 일일 수익률 계산
-        daily_returns = returns_series.pct_change().dropna()
+        print("🔄 Trimmed Mean 기대수익률 계산 중...")
         
-        # 이상값 제거
-        daily_returns = daily_returns.replace([np.inf, -np.inf], np.nan)
-        daily_returns = daily_returns[daily_returns.abs() <= 0.3]  # ±30% 제한
-        daily_returns = daily_returns.dropna()
+        # 1. 일일 수익률 계산
+        returns = price_data.pct_change().dropna()
+        print(f"   - 수익률 데이터 기간: {len(returns)}일")
         
-        if daily_returns.empty or len(daily_returns) < 10:
-            return 0.0, 0.1, 0.0
+        if returns.empty:
+            print("   ⚠️ 수익률 데이터가 비어있습니다.")
+            return pd.Series(index=price_data.columns, data=0.0)
         
-        # 포트폴리오 일일 수익률
-        if isinstance(weights, dict):
-            portfolio_daily_returns = sum(weights.get(col, 0) * daily_returns[col] 
-                                        for col in daily_returns.columns 
-                                        if col in weights and not pd.isna(daily_returns[col]).all())
+        # 2. 각 자산별로 Trimmed Mean 계산
+        trimmed_returns = {}
+        
+        for ticker in returns.columns:
+            # 해당 자산의 일일 수익률 시리즈 (NaN 제거)
+            asset_returns = returns[ticker].dropna()
+            
+            if len(asset_returns) < 10:  # 최소 10일 데이터 필요
+                print(f"   ⚠️ {ticker}: 데이터 부족 ({len(asset_returns)}일)")
+                trimmed_returns[ticker] = 0.0
+                continue
+            
+            # 3. 상위 30%, 하위 30% 제거
+            # scipy.stats.trim_mean을 사용하거나 직접 구현
+            sorted_returns = asset_returns.sort_values()
+            n = len(sorted_returns)
+            
+            # 제거할 개수 계산 (양쪽에서 각각 30%)
+            trim_count = int(n * trim_ratio)
+            
+            # 양쪽 극값 제거
+            if trim_count > 0:
+                trimmed_data = sorted_returns.iloc[trim_count:-trim_count]
+            else:
+                trimmed_data = sorted_returns
+            
+            # 4. 중간값들의 평균 계산
+            if len(trimmed_data) > 0:
+                daily_mean = trimmed_data.mean()
+                # 5. 연율화 (252 거래일 기준)
+                annual_return = daily_mean * 252
+            else:
+                annual_return = 0.0
+            
+            trimmed_returns[ticker] = annual_return
+            
+            print(f"   - {ticker}: 원본 {n}일 → 트림 후 {len(trimmed_data)}일 → 연수익률 {annual_return:.2%}")
+        
+        # 6. pd.Series로 변환
+        mu_trimmed = pd.Series(trimmed_returns)
+        
+        # 7. 이상값 처리
+        mu_trimmed = mu_trimmed.replace([np.inf, -np.inf], np.nan).fillna(0)
+        
+        print(f"✅ Trimmed Mean 기대수익률 계산 완료")
+        return mu_trimmed
+        
+    except Exception as e:
+        print(f"❌ Trimmed Mean 계산 오류: {str(e)}")
+        # 오류 시 기본값 반환
+        return pd.Series(index=price_data.columns, data=0.02)  # 2% 기본값
+
+def safe_annualize_performance(price_data, weights, risk_free_rate=0.02, mu=None):
+    """
+    ✅ 통일된 수익률 계산을 사용한 포트폴리오 성과 연율화 계산
+    외부에서 계산된 mu(Trimmed Mean 기대수익률)를 우선 사용하고, 없으면 내부에서 Trimmed Mean으로 계산
+    """
+    try:
+        # ✅ 1. 외부에서 전달받은 mu가 있으면 그것을 사용 (일관성 유지)
+        if mu is not None:
+            # 이론적 포트폴리오 수익률 계산
+            portfolio_return = sum(weights.get(ticker, 0) * mu.get(ticker, 0) 
+                                 for ticker in mu.index if ticker in weights)
+            
+            # 공분산 행렬로 변동성 계산 (변경 없음)
+            if isinstance(price_data, pd.DataFrame) and len(price_data.columns) > 1:
+                S = risk_models.sample_cov(price_data)
+                tickers = list(weights.keys())
+                weights_array = np.array([weights[ticker] for ticker in tickers])
+                cov_matrix = S.loc[tickers, tickers].values
+                daily_vol = np.sqrt(weights_array.T @ cov_matrix @ weights_array)
+                annual_vol = daily_vol 
+            else:
+                # 단일 자산인 경우
+                annual_vol = 0.1  # 기본값
+            
+            sharpe = (portfolio_return - risk_free_rate) / annual_vol if annual_vol > 0 else 0.0
+            return float(portfolio_return), float(annual_vol), float(sharpe)
+        
+        # ✅ 2. mu가 없으면 Trimmed Mean으로 내부 계산 (기존 EMA에서 변경)
         else:
-            # weights가 numpy array인 경우
-            portfolio_daily_returns = np.dot(daily_returns.values, weights)
-        
-        if isinstance(portfolio_daily_returns, pd.Series):
-            portfolio_daily_returns = portfolio_daily_returns.dropna()
-        
-        if len(portfolio_daily_returns) == 0:
-            return 0.0, 0.1, 0.0
-        
-        # 연율화 계산 (252 거래일 기준)
-        mean_daily_return = np.mean(portfolio_daily_returns)
-        daily_vol = np.std(portfolio_daily_returns, ddof=1)
-        
-        # NaN 또는 무한값 체크
-        if np.isnan(mean_daily_return) or np.isinf(mean_daily_return):
-            mean_daily_return = 0.0
-        if np.isnan(daily_vol) or np.isinf(daily_vol) or daily_vol <= 0:
-            daily_vol = 0.01  # 최소 변동성 설정
-        
-        # 연율화
-        annual_return = mean_daily_return * 252 + risk_free_rate
-        annual_vol = daily_vol * np.sqrt(252)
-        
-        # 변동성 상한선 설정 (100%)
-        annual_vol = min(annual_vol, 1.0)
-        
-        # 샤프 비율
-        sharpe = (annual_return - risk_free_rate) / annual_vol if annual_vol > 0 else 0.0
-        
-        return float(annual_return), float(annual_vol), float(sharpe)
+            # 🆕 Trimmed Mean 기대수익률 계산
+            mu_trimmed = calculate_trimmed_mean_returns(price_data)
+            
+            # 포트폴리오 수익률
+            portfolio_return = sum(weights.get(ticker, 0) * mu_trimmed.get(ticker, 0) 
+                                 for ticker in mu_trimmed.index if ticker in weights)
+            
+            # 변동성 계산 (공분산 방식은 그대로 유지)
+            S = risk_models.sample_cov(price_data)
+            tickers = list(weights.keys())
+            weights_array = np.array([weights[ticker] for ticker in tickers])
+            cov_matrix = S.loc[tickers, tickers].values
+            annual_vol = np.sqrt(weights_array.T @ cov_matrix @ weights_array)
+            
+            # 변동성 상한선 설정 (100%)
+            annual_vol = min(annual_vol, 1.0)
+            
+            # 샤프 비율
+            sharpe = (portfolio_return - risk_free_rate) / annual_vol if annual_vol > 0 else 0.0
+            
+            return float(portfolio_return), float(annual_vol), float(sharpe)
         
     except Exception as e:
         print(f"성과 연율화 계산 오류: {str(e)}")
@@ -225,32 +299,32 @@ def safe_optimize_with_constraints(mu, S, selected_tickers, target_return, risk_
         result_weights = np.array([1/n] * n)
         weights = dict(zip(available_tickers, result_weights))
         
-        # 실제 가격 데이터로 성과 계산
+        # ✅ 통일된 mu를 사용하여 성과 계산
         portfolio_return, portfolio_vol, sharpe = safe_annualize_performance(
-            price_data[available_tickers], weights, risk_free_rate
+            price_data[available_tickers], weights, risk_free_rate, mu
         )
         
         return weights, portfolio_return, portfolio_vol, sharpe
     
     weights = dict(zip(available_tickers, result.x))
     
-    # 실제 가격 데이터로 성과 계산
+    # ✅ 통일된 mu를 사용하여 성과 계산
     portfolio_return, portfolio_vol, sharpe = safe_annualize_performance(
-        price_data[available_tickers], weights, risk_free_rate
+        price_data[available_tickers], weights, risk_free_rate, mu
     )
     
     return weights, portfolio_return, portfolio_vol, sharpe
 
-# ★★★ 함수 정의와 내부 로직을 모두 수정합니다 ★★★
-def safe_optimize_risk_parity_with_constraints(prices, target_return=None, risk_free_rate=0.02):
+def safe_optimize_risk_parity_with_constraints(mu, S, prices, target_return=None, risk_free_rate=0.02):
     """
-    가격 데이터를 기반으로 Risk Parity 포트폴리오를 계산하고 제약조건을 처리합니다.
+    ✅ 외부에서 계산된 mu, S를 받아서 사용하는 Risk Parity 최적화
     """
-    # 1. 함수 내부에서 수익률(returns)을 직접 계산합니다.
     returns = prices.pct_change().dropna()
     n = returns.shape[1]
     tickers = returns.columns.tolist()
-    cov_matrix = returns.cov().values
+    
+    # ✅ 외부에서 전달받은 공분산 행렬 사용
+    cov_matrix = S.values
 
     # --- Core Risk Parity Optimization ---
     def risk_budget_objective(weights):
@@ -272,10 +346,8 @@ def safe_optimize_risk_parity_with_constraints(prices, target_return=None, risk_
 
     # --- Constraint Handling ---
     weights_array = rp_weights
-    # 2. 올바른 가격 데이터(prices)로 기대수익률(mu)을 계산합니다.
-    mu = expected_returns.mean_historical_return(prices)
-    mu = mu.replace([np.inf, -np.inf], np.nan).fillna(0)
     
+    # ✅ 외부에서 전달받은 mu 사용 (다시 계산하지 않음!)
     current_return = mu.values @ weights_array
 
     if target_return is not None and current_return < target_return:
@@ -291,18 +363,17 @@ def safe_optimize_risk_parity_with_constraints(prices, target_return=None, risk_
     
     # --- Final Performance Calculation ---
     final_weights = dict(zip(tickers, weights_array))
-    final_return = mu.values @ weights_array
-    # 3. 일일 변동성을 연간 변동성으로 변환합니다.
-    daily_volatility = np.sqrt(weights_array.T @ cov_matrix @ weights_array)
-    annual_volatility = daily_volatility * np.sqrt(252)
     
-    sharpe = (final_return - risk_free_rate) / annual_volatility if annual_volatility > 0 else 0.0
+    # ✅ 통일된 mu를 사용하여 성과 계산
+    final_return, annual_volatility, sharpe = safe_annualize_performance(
+        prices, final_weights, risk_free_rate, mu
+    )
 
     return final_weights, final_return, annual_volatility, sharpe
 
 def get_optimized_portfolio(selected_tickers, params):
     """
-    선택된 티커 목록과 파라미터를 기반으로 포트폴리오를 최적화합니다.
+    🆕 Trimmed Mean 기대수익률을 사용한 통일된 포트폴리오 최적화
     """
     try:
         print("\n" + "="*50)
@@ -369,20 +440,23 @@ def get_optimized_portfolio(selected_tickers, params):
             raise ValueError("최적화를 위해 유효한 데이터를 가진 2개 이상의 종목이 필요합니다.")
         
         print("\n" + "="*50)
-        print(" STEP 2: 개별 자산 성과 분석 ".center(50, "="))
+        print(" STEP 2: 개별 자산 성과 분석 (Trimmed Mean 방식) ".center(50, "="))
         print("="*50)
         
-        # ★★★ 핵심 수정사항: mu를 계산 직후 바로 정제하여 모든 하위 로직에 안정적인 데이터를 전달합니다.
-        mu = expected_returns.mean_historical_return(price_df_cleaned)
-        mu = mu.replace([np.inf, -np.inf], np.nan).fillna(0)
+        # 🆕 핵심 수정사항: Trimmed Mean 기대수익률로 통일
+        print("📊 Trimmed Mean 기대수익률 계산 중...")
+        mu = calculate_trimmed_mean_returns(price_df_cleaned)
         
+        # 공분산 계산은 기존 방식 그대로 유지
+        print("📊 공분산 행렬 계산 중 (기존 방식 유지)...")
         S = risk_models.sample_cov(price_df_cleaned)
         
+        print("✅ 모든 함수가 동일한 Trimmed Mean 기대수익률 사용")
         for ticker in available_tickers:
             ticker_return = mu.get(ticker, 0)
             ticker_volatility = np.sqrt(S.loc[ticker, ticker]) 
             print(f"▶ {ticker}")
-            print(f"  - 연율화 기대수익률: {ticker_return:.2%}")
+            print(f"  - Trimmed Mean 연율화 기대수익률: {ticker_return:.2%}")
             print(f"  - 연율화 변동성: {ticker_volatility:.2%}")
 
         print("\n" + "="*50)
@@ -396,16 +470,15 @@ def get_optimized_portfolio(selected_tickers, params):
 
         print(f"최적화 모드: {mode}, 무위험수익률: {risk_free_rate:.2%}, 목표수익률: {target_return:.2%}")
         
+        # ✅ 모든 최적화 모드에서 동일한 mu, S 사용
         if mode == "EqualWeight":
             weights, e_ret, ann_vol, sharpe = safe_optimize_with_constraints(
                 mu, S, available_tickers, target_return, risk_free_rate, price_df_cleaned, "min_vol"
             )
         elif mode == "RiskParity":
-            # ★★★ 수정: 수익률(returns) 대신 가격(prices) 데이터를 전달합니다. ★★★
+            # ✅ 통일된 mu, S 전달
             weights, e_ret, ann_vol, sharpe = safe_optimize_risk_parity_with_constraints(
-                prices=price_df_cleaned,
-                target_return=target_return,
-                risk_free_rate=risk_free_rate
+                mu, S, price_df_cleaned, target_return, risk_free_rate
             )
         elif mode == "MVO":
             mvo_objective = params.get("mvo_objective", "max_sharpe")
@@ -424,8 +497,9 @@ def get_optimized_portfolio(selected_tickers, params):
             cleaned_weights = {k: 1/len(available_tickers) for k in available_tickers}
 
         print("\n" + "="*50)
-        print(" STEP 4: 최종 최적화 결과 ".center(50, "="))
+        print(" STEP 4: 최종 최적화 결과 (Trimmed Mean 통일) ".center(50, "="))
         print("="*50)
+        print("✅ 모든 함수가 동일한 Trimmed Mean 기대수익률 사용")
         print("▶ 최적 비중:")
         for ticker, weight in cleaned_weights.items():
             print(f"  - {ticker}: {weight:.2%}")
@@ -536,15 +610,6 @@ def shortfallrisk(annual_return, annual_vol, risk_free_rate=0.02):
             "portfolio_annual_return": round(annual_return * 100, 2),
             "portfolio_annual_volatility": round(annual_vol * 100, 2),
             "shortfall_risk_by_years": shortfall_results
-        }
-        
-    except Exception as e:
-        print(f"Shortfall Risk 계산 오류: {str(e)}")
-        return {
-            "error": str(e),
-            "portfolio_annual_return": 0.0,
-            "portfolio_annual_volatility": 0.0,
-            "shortfall_risk_by_years": []
         }
         
     except Exception as e:

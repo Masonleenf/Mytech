@@ -22,7 +22,7 @@ def load_list_csv():
     """list.csv 파일을 로드하여 item_code1과 통계 정보 매핑"""
     try:
         if not os.path.exists(LIST_CSV_PATH):
-            print(f"❌ list.csv 파일이 없습니다: {LIST_CSV_PATH}")
+            print(f"⚠ list.csv 파일이 없습니다: {LIST_CSV_PATH}")
             return {}
         
         df = pd.read_csv(LIST_CSV_PATH)
@@ -43,7 +43,7 @@ def load_list_csv():
         return mapping
         
     except Exception as e:
-        print(f"❌ list.csv 로드 실패: {e}")
+        print(f"⚠ list.csv 로드 실패: {e}")
         return {}
 
 def get_ecos_csv_data(item_code1):
@@ -137,7 +137,7 @@ def get_latest_market_data(stat_code, item_code1, list_mapping):
         return None
 
 def format_market_indicators():
-    """시장지표 데이터를 프런트엔드 형식으로 변환 (CSV 파일 기반)"""
+    """시장지표 데이터를 프론트엔드 형식으로 변환 (CSV 파일 기반)"""
     list_mapping = load_list_csv()
     
     if not list_mapping:
@@ -204,7 +204,7 @@ def format_market_indicators():
                 
                 formatted_data = {
                     'id': f"{stat_code}_{item_code1}",
-                    'icon': icon_type,  # 프런트엔드에서 아이콘 매핑용
+                    'icon': icon_type,  # 프론트엔드에서 아이콘 매핑용
                     'name': display_name,
                     'description': description,
                     'value': value_display,
@@ -276,6 +276,53 @@ def get_etf_price_info(ticker):
     except Exception as e:
         print(f"가격 정보 조회 오류 ({ticker}): {e}")
         return None
+
+# ✅ 공통 최적화 함수 추가 - 중복 제거
+def perform_portfolio_optimization(asset_pairs, params):
+    """
+    포트폴리오 최적화를 수행하는 공통 함수
+    optimize_endpoint와 calculate_comprehensive_risk_endpoint에서 공통 사용
+    """
+    try:
+        with open(MASTER_FILE_PATH, 'r', encoding='utf-8') as f:
+            etf_df = pd.DataFrame(json.load(f))
+        
+        # 자산 조합을 통해 대표 코드 찾기
+        final_codes = set()
+        
+        for pair in asset_pairs:
+            saa = pair.get('saa_class')
+            taa = pair.get('taa_class')
+            
+            if not saa or not taa:
+                continue
+
+            # asset pair에 해당하는 행을 찾아 'code'를 가져옵니다.
+            matched_etf = etf_df[
+                (etf_df['saa_class'] == saa) & 
+                (etf_df['taa_class'] == taa)
+            ]
+            
+            if not matched_etf.empty:
+                code = matched_etf['code'].iloc[0]
+                final_codes.add(code)
+                print(f"조합 ['{saa}' - '{taa}'] 대표 코드: {code}")
+            else:
+                print(f"경고 : 조합 ['{saa}' - '{taa}']에 해당하는 ETF가 없습니다.")
+
+        selected_codes = sorted(list(final_codes))
+        print(f"선택된 최종 코드 목록: {selected_codes}")
+
+        if len(selected_codes) < 2:
+            raise ValueError("유효한 대표 코드를 2개 이상 선택할 수 없습니다.")
+
+        # ✅ 포트폴리오 최적화 실행 (한 번만)
+        weights, performance = optimizer.get_optimized_portfolio(selected_codes, params)
+        
+        return selected_codes, weights, performance
+        
+    except Exception as e:
+        raise e
 
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -430,7 +477,7 @@ def get_market_indicators_summary():
 # ===== 기존 ETF 관련 API =====
 @app.route('/api/assets', methods=['GET'])
 def get_assets_endpoint():
-    """프런트엔드에 보여줄 자산(ETF) 목록 전체를 반환합니다."""
+    """프론트엔드에 보여줄 자산(ETF) 목록 전체를 반환합니다."""
     if not os.path.exists(MASTER_FILE_PATH):
         return jsonify({"status": "error", "message": "ETF 마스터 파일이 없습니다."}), 404
     with open(MASTER_FILE_PATH, 'r', encoding='utf-8') as f:
@@ -524,42 +571,8 @@ def optimize_endpoint():
     params = data.get("optimization_params")
 
     try:
-        with open(MASTER_FILE_PATH, 'r', encoding='utf-8') as f:
-            etf_df = pd.DataFrame(json.load(f))
-        
-        # ☆☆☆☆☆ [수정된 로직 시작] ☆☆☆☆☆
-        # 이제 티커 대신 합성 지수 'code'를 찾습니다.
-        final_codes = set()
-        
-        for pair in asset_pairs:
-            saa = pair.get('saa_class')
-            taa = pair.get('taa_class')
-            
-            if not saa or not taa:
-                continue
-
-            # asset pair에 해당하는 행을 찾아 'code'를 가져옵니다.
-            matched_etf = etf_df[
-                (etf_df['saa_class'] == saa) & 
-                (etf_df['taa_class'] == taa)
-            ]
-            
-            if not matched_etf.empty:
-                code = matched_etf['code'].iloc[0]
-                final_codes.add(code)
-                print(f"조합 ['{saa}' - '{taa}'] 대표 코드: {code}")
-            else:
-                print(f"경고: 조합 ['{saa}' - '{taa}']에 해당하는 ETF가 없습니다.")
-
-        selected_codes = sorted(list(final_codes))
-        print(f"선택된 최종 코드 목록: {selected_codes}")
-
-        if len(selected_codes) < 2:
-            return jsonify({"status": "error", "message": "유효한 대표 코드를 2개 이상 선택할 수 없습니다."}), 400
-
-        # 포트폴리오 최적화 실행 시 티커 리스트 대신 코드 리스트를 전달합니다.
-        weights, performance = optimizer.get_optimized_portfolio(selected_codes, params)
-        # ☆☆☆☆☆ [수정된 로직 끝] ☆☆☆☆☆
+        # ✅ 공통 최적화 함수 사용 (중복 제거)
+        selected_codes, weights, performance = perform_portfolio_optimization(asset_pairs, params)
 
         # 백테스팅 실행 (백테스터는 가중치 기반이므로 수정 필요 없음)
         backtesting_results = backtester.run_backtest(weights)
@@ -583,62 +596,32 @@ def optimize_endpoint():
 
 @app.route('/api/risk-analysis', methods=['POST'])
 def calculate_comprehensive_risk_endpoint():
-    """VaR과 Shortfall Risk를 한번에 계산하는 통합 엔드포인트"""
+    """✅ optimize_endpoint의 performance 결과를 받아서 VaR과 Shortfall Risk만 계산"""
     data = request.get_json()
     print("\n--- 종합 리스크 분석 요청 수신 ---")
     print(f"요청 데이터: {data}")
     
-    if not data or "asset_pairs" not in data or "optimization_params" not in data:
-        return jsonify({"status": "error", "message": "'asset_pairs'와 'optimization_params'가 모두 필요합니다."}), 400
+    # ✅ 이제 performance 데이터를 직접 받음 (최적화 결과 재사용)
+    if not data or "performance" not in data:
+        return jsonify({"status": "error", "message": "'performance' 데이터가 필요합니다."}), 400
             
-    asset_pairs = data.get("asset_pairs")
-    params = data.get("optimization_params")
+    performance = data.get("performance")
+    risk_free_rate = data.get("risk_free_rate", 0.02)
 
     try:
-        with open(MASTER_FILE_PATH, 'r', encoding='utf-8') as f:
-            etf_df = pd.DataFrame(json.load(f))
+        # ✅ optimize_endpoint에서 전달받은 performance 데이터에서 수익률과 변동성 추출
+        annual_return = performance.get('expected_annual_return')
+        annual_vol = performance.get('annual_volatility')
         
-        # 자산 조합을 통해 대표 코드 찾기
-        final_codes = set()
+        if annual_return is None or annual_vol is None:
+            return jsonify({
+                "status": "error", 
+                "message": "performance 데이터에 'expected_annual_return'과 'annual_volatility'가 필요합니다."
+            }), 400
         
-        for pair in asset_pairs:
-            saa = pair.get('saa_class')
-            taa = pair.get('taa_class')
-            
-            if not saa or not taa:
-                continue
-
-            matched_etf = etf_df[
-                (etf_df['saa_class'] == saa) & 
-                (etf_df['taa_class'] == taa)
-            ]
-            
-            if not matched_etf.empty:
-                code = matched_etf['code'].iloc[0]
-                final_codes.add(code)
-                print(f"조합 ['{saa}' - '{taa}'] 대표 코드: {code}")
-            else:
-                print(f"경고 : 조합 ['{saa}' - '{taa}']에 해당하는 ETF가 없습니다.")
-
-        selected_codes = sorted(list(final_codes))
-        print(f"선택된 최종 코드 목록: {selected_codes}")
-
-        if len(selected_codes) < 2:
-            return jsonify({"status": "error", "message": "유효한 대표 코드를 2개 이상 선택할 수 없습니다."}), 400
-
-        # 1. 포트폴리오 최적화 한번만 수행
-        print("=== 포트폴리오 최적화 수행 ===")
-        weights, performance = optimizer.get_optimized_portfolio(selected_codes, params)
-        print(f"최적화 결과: {performance}")
+        print(f"전달받은 연간 수익률: {annual_return:.4f}, 연간 변동성: {annual_vol:.4f}")
         
-        # 2. 최적화 결과에서 수익률과 변동성 추출
-        annual_return = performance['expected_annual_return']
-        annual_vol = performance['annual_volatility'] 
-        risk_free_rate = params.get("risk_free_rate", 0.02)
-        
-        print(f"연간 수익률: {annual_return:.4f}, 연간 변동성: {annual_vol:.4f}")
-        
-        # 3. 추출된 값으로 VaR과 Shortfall Risk 계산 (중복 계산 없음)
+        # ✅ 최적화 없이 바로 VaR과 Shortfall Risk 계산
         print("=== VaR 계산 시작 ===")
         var_results = optimizer.ValueAtRisk(annual_return, annual_vol, risk_free_rate)
         print(f"VaR 계산 완료: {var_results}")
@@ -647,9 +630,8 @@ def calculate_comprehensive_risk_endpoint():
         shortfall_results = optimizer.shortfallrisk(annual_return, annual_vol, risk_free_rate)
         print(f"Shortfall Risk 계산 완료: {shortfall_results}")
         
-        # 4. 응답 구조
+        # ✅ 응답 구조 (selected_etfs는 제거, 리스크 분석 결과만)
         result = {
-            "selected_etfs": selected_codes,
             "value_at_risk": var_results,
             "shortfall_risk": shortfall_results
         }
@@ -658,8 +640,6 @@ def calculate_comprehensive_risk_endpoint():
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return jsonify(result), 200
         
-    except (ValueError, FileNotFoundError) as e:
-        return jsonify({"status": "error", "message": str(e)}), 400
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -696,7 +676,7 @@ if __name__ == '__main__':
         app.run(host='0.0.0.0', port=8000, debug=False, threaded=True)
         
     except Exception as e:
-        print(f"❌ 서버 시작 실패: {e}")
+        print(f"⚠ 서버 시작 실패: {e}")
         import traceback
         traceback.print_exc()
         # 그래도 시도해보기
