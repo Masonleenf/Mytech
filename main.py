@@ -277,27 +277,36 @@ def get_etf_price_info(ticker):
         print(f"가격 정보 조회 오류 ({ticker}): {e}")
         return None
 
-# ✅ 공통 최적화 함수 추가 - 중복 제거
 def perform_portfolio_optimization(asset_pairs, params):
-    """
-    포트폴리오 최적화를 수행하는 공통 함수
-    optimize_endpoint와 calculate_comprehensive_risk_endpoint에서 공통 사용
-    """
+    """공통 포트폴리오 최적화 로직"""
     try:
-        with open(MASTER_FILE_PATH, 'r', encoding='utf-8') as f:
-            etf_df = pd.DataFrame(json.load(f))
+        # ETF 마스터 파일 로드
+        if not os.path.exists(MASTER_FILE_PATH):
+            raise FileNotFoundError("ETF 마스터 파일이 없습니다.")
         
-        # 자산 조합을 통해 대표 코드 찾기
+        etf_df = pd.read_json(MASTER_FILE_PATH)
         final_codes = set()
-        
-        for pair in asset_pairs:
-            saa = pair.get('saa_class')
-            taa = pair.get('taa_class')
-            
-            if not saa or not taa:
-                continue
 
-            # asset pair에 해당하는 행을 찾아 'code'를 가져옵니다.
+        # 🆕 리밸런싱 모드에서 current_weights 처리
+        mode = params.get("mode", "MVO")
+        current_weights = params.get("current_weights", {})
+        
+        if mode == "Rebalancing" and current_weights:
+            # current_weights에서 티커 추출
+            for ticker in current_weights.keys():
+                final_codes.add(ticker)
+            print(f"리밸런싱 모드: current_weights에서 추출한 티커: {list(final_codes)}")
+
+        # 기존 asset_pairs 처리 (추가 자산이 있는 경우)
+        for pair in asset_pairs:
+            saa = pair.get("saa_class")
+            taa = pair.get("taa_class")
+            
+            # 🆕 리밸런싱에서 EXISTING 처리 (프론트엔드에서 보낸 경우)
+            if saa == "EXISTING":
+                final_codes.add(taa)  # taa에 실제 티커가 들어있음
+                continue
+                
             matched_etf = etf_df[
                 (etf_df['saa_class'] == saa) & 
                 (etf_df['taa_class'] == taa)
@@ -313,8 +322,13 @@ def perform_portfolio_optimization(asset_pairs, params):
         selected_codes = sorted(list(final_codes))
         print(f"선택된 최종 코드 목록: {selected_codes}")
 
-        if len(selected_codes) < 2:
-            raise ValueError("유효한 대표 코드를 2개 이상 선택할 수 없습니다.")
+        # 🆕 리밸런싱 모드에서는 1개 이상이면 OK
+        min_assets = 1 if mode == "Rebalancing" else 2
+        if len(selected_codes) < min_assets:
+            if mode == "Rebalancing":
+                raise ValueError("리밸런싱을 위해 최소 1개의 유효한 자산이 필요합니다.")
+            else:
+                raise ValueError("유효한 대표 코드를 2개 이상 선택할 수 없습니다.")
 
         # ✅ 포트폴리오 최적화 실행 (한 번만)
         weights, performance = optimizer.get_optimized_portfolio(selected_codes, params)
@@ -569,6 +583,11 @@ def optimize_endpoint():
             
     asset_pairs = data.get("asset_pairs")
     params = data.get("optimization_params")
+
+    current_weights = data.get("current_weights", {})
+    if current_weights:
+        params["current_weights"] = current_weights
+        print(f"💼 받은 현재 비중: {current_weights}")
 
     try:
         # ✅ 공통 최적화 함수 사용 (중복 제거)

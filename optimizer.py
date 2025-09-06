@@ -486,6 +486,20 @@ def get_optimized_portfolio(selected_tickers, params):
             weights, e_ret, ann_vol, sharpe = safe_optimize_with_constraints(
                 mu, S, available_tickers, target_return, risk_free_rate, price_df_cleaned, mvo_objective
             )
+        elif mode == "Rebalancing":
+            # 🆕 리밸런싱 모드 추가
+            rebalancing_objective = params.get("mvo_objective", "max_sharpe")
+            weight_change_limit = params.get("risk_asset_limit", 0.5)  # 리밸런싱 강도를 weight_change로 사용
+            current_weights = params.get("current_weights", {})  # 현재 보유 비중
+            
+            print(f"Rebalancing 목적 함수: {rebalancing_objective}")
+            print(f"Weight change 한계: {weight_change_limit:.2%}")
+            print(f"현재 보유 비중: {current_weights}")
+            
+            weights, e_ret, ann_vol, sharpe = safe_rebalancing_optimize(
+                mu, S, available_tickers, target_return, risk_free_rate, price_df_cleaned, 
+                rebalancing_objective, weight_change_limit, current_weights
+            )
         else:
             raise ValueError(f"알 수 없는 모드입니다: {mode}")
 
@@ -534,6 +548,211 @@ def get_optimized_portfolio(selected_tickers, params):
         traceback.print_exc()
         raise e
     
+
+def safe_rebalancing_optimize(mu, S, selected_tickers, target_return, risk_free_rate, price_data, 
+                            objective, weight_change_limit, current_weights):
+    """
+    리밸런싱 제약조건이 포함된 포트폴리오 최적화
+    
+    Args:
+        mu: 기대수익률
+        S: 공분산 행렬  
+        selected_tickers: 선택된 티커 목록
+        target_return: 목표 수익률
+        risk_free_rate: 무위험 수익률
+        price_data: 가격 데이터
+        objective: 목적 함수 ("max_sharpe" or "min_vol")
+        weight_change_limit: 비중 변경 한계 (0.0 ~ 1.0)
+        current_weights: 현재 보유 비중 딕셔너리
+    """
+    # None 값 처리
+    if target_return is None:
+        target_return = risk_free_rate if risk_free_rate is not None else 0.02
+    if risk_free_rate is None:
+        risk_free_rate = 0.02
+    
+    # mu와 S의 컬럼 순서와 selected_tickers 순서를 맞춤
+    if hasattr(mu, 'index'):
+        # NaN이나 무한값이 있는 티커 제거
+        valid_tickers = []
+        for ticker in selected_tickers:
+            if ticker in mu.index and not (np.isnan(mu[ticker]) or np.isinf(mu[ticker])):
+                valid_tickers.append(ticker)
+        
+        if len(valid_tickers) < 1:
+            raise ValueError("유효한 데이터를 가진 자산이 1개 미만입니다.")
+        
+        mu_array = np.array([mu[ticker] for ticker in valid_tickers])
+        available_tickers = valid_tickers
+    else:
+        mu_array = mu
+        available_tickers = selected_tickers
+    
+    n = len(available_tickers)
+    if n < 1:
+        raise ValueError("리밸런싱을 위해 최소 1개의 유효한 자산이 필요합니다.")
+    
+    # 공분산 행렬도 순서 맞춤
+    if hasattr(S, 'index'):
+        if n == 1:
+            S_array = np.array([[S.loc[available_tickers[0], available_tickers[0]]]])
+        else:
+            S_array = S.loc[available_tickers, available_tickers].values
+    else:
+        S_array = S
+    
+    # 공분산 행렬의 특이값 확인 (다중 자산인 경우만)
+    if n > 1:
+        try:
+            np.linalg.cholesky(S_array)
+        except np.linalg.LinAlgError:
+            # 정규화 추가
+            S_array += np.eye(n) * 1e-8
+    
+    # 현재 비중 벡터 생성
+    current_weights_array = np.array([current_weights.get(ticker, 1/n) for ticker in available_tickers])
+    
+    # 현재 비중 정규화 (합계 = 1)
+    if np.sum(current_weights_array) > 0:
+        current_weights_array = current_weights_array / np.sum(current_weights_array)
+    else:
+        current_weights_array = np.array([1/n] * n)
+    
+    # 초기 가중치 (현재 비중에서 시작)
+    x0 = current_weights_array.copy()
+    
+    # 제약조건 설정
+    constraints = []
+    
+    # 가중치 합계 = 1
+    constraints.append({'type': 'eq', 'fun': lambda x: np.sum(x) - 1})
+    
+    # 목표수익률 이상 (단일 자산이 아닌 경우만)
+    if n > 1:
+        constraints.append({'type': 'ineq', 'fun': lambda x: np.dot(x, mu_array) - target_return})
+    
+    # 🆕 핵심: Weight Change 제약조건 추가
+    # |w_new - w_current|의 합이 weight_change_limit 이하
+    def weight_change_constraint(x):
+        weight_changes = np.abs(x - current_weights_array)
+        total_change = np.sum(weight_changes)
+        return weight_change_limit - total_change  # >= 0이어야 함
+    
+    constraints.append({'type': 'ineq', 'fun': weight_change_constraint})
+    
+    print(f"현재 비중: {dict(zip(available_tickers, current_weights_array))}")
+    print(f"Weight change 한계: {weight_change_limit:.2%}")
+
+    # 경계 조건 (0 <= 가중치 <= 1)
+    bounds = [(0.0, 1.0) for _ in range(n)]
+    
+    # 목적함수 정의
+    if objective == "max_sharpe":
+        def objective_func(x):
+            portfolio_return = np.dot(x, mu_array)
+            if n == 1:
+                portfolio_vol = np.sqrt(S_array[0,0])
+            else:
+                portfolio_vol = np.sqrt(np.dot(x, np.dot(S_array, x)))
+            if portfolio_vol == 0 or np.isnan(portfolio_vol):
+                return 1e6
+            sharpe = (portfolio_return - risk_free_rate) / portfolio_vol
+            return -sharpe  # 최소화 문제이므로 음수 반환
+    elif objective == "min_vol":
+        def objective_func(x):
+            if n == 1:
+                vol = np.sqrt(S_array[0,0])
+            else:
+                vol = np.sqrt(np.dot(x, np.dot(S_array, x)))
+            return vol if not np.isnan(vol) else 1e6
+    
+    # 여러 최적화 방법을 순차적으로 시도
+    methods = ['SLSQP', 'trust-constr']
+    result = None
+    
+    for method in methods:
+        try:
+            result = minimize(objective_func, x0, method=method, bounds=bounds, constraints=constraints)
+            if result.success and not np.any(np.isnan(result.x)):
+                break
+            else:
+                print(f"{method} 방법 실패: {result.message}")
+        except Exception as e:
+            print(f"{method} 방법에서 오류 발생: {str(e)}")
+            continue
+    
+    # 모든 방법이 실패하면 weight_change_limit을 완화하여 재시도
+    if result is None or not result.success or np.any(np.isnan(result.x)):
+        print("제약조건을 완화하여 재시도합니다...")
+        
+        # weight_change_limit을 50% 늘려서 재시도
+        relaxed_limit = min(weight_change_limit * 1.5, 2.0)  # 최대 200%까지
+        print(f"Weight change 한계를 {weight_change_limit:.2%}에서 {relaxed_limit:.2%}로 완화")
+        
+        def relaxed_weight_change_constraint(x):
+            weight_changes = np.abs(x - current_weights_array)
+            total_change = np.sum(weight_changes)
+            return relaxed_limit - total_change
+        
+        # 완화된 제약조건
+        relaxed_constraints = [c for c in constraints if c['fun'] != weight_change_constraint]
+        relaxed_constraints.append({'type': 'ineq', 'fun': relaxed_weight_change_constraint})
+        
+        try:
+            result = minimize(objective_func, x0, method='SLSQP', bounds=bounds, constraints=relaxed_constraints)
+        except Exception as e:
+            print(f"완화된 제약조건에서도 실패: {str(e)}")
+    
+    # 최후의 수단: 현재 비중 유지 (아주 작은 조정만)
+    if result is None or not result.success or np.any(np.isnan(result.x)):
+        print("최적화 실패. 현재 비중에서 소폭 조정합니다.")
+        
+        # 현재 비중에서 5% 내에서만 조정
+        small_adjustment = 0.05
+        result_weights = current_weights_array.copy()
+        
+        # 가장 성과가 좋은 자산의 비중을 약간 늘리고, 나쁜 자산의 비중을 약간 줄임
+        if n > 1:
+            best_asset_idx = np.argmax(mu_array)
+            worst_asset_idx = np.argmin(mu_array)
+            
+            # 5% 이내에서 조정
+            adjustment = min(small_adjustment, result_weights[worst_asset_idx])
+            result_weights[worst_asset_idx] -= adjustment
+            result_weights[best_asset_idx] += adjustment
+        
+        weights = dict(zip(available_tickers, result_weights))
+        
+        # ✅ 통일된 mu를 사용하여 성과 계산
+        portfolio_return, portfolio_vol, sharpe = safe_annualize_performance(
+            price_data[available_tickers] if hasattr(price_data, 'columns') else None, 
+            weights, risk_free_rate, mu
+        )
+        
+        return weights, portfolio_return, portfolio_vol, sharpe
+    
+    weights = dict(zip(available_tickers, result.x))
+    
+    # ✅ 통일된 mu를 사용하여 성과 계산
+    portfolio_return, portfolio_vol, sharpe = safe_annualize_performance(
+        price_data[available_tickers] if hasattr(price_data, 'columns') else None, 
+        weights, risk_free_rate, mu
+    )
+    
+    # 🔍 결과 분석 출력
+    print(f"\n리밸런싱 결과:")
+    for ticker in available_tickers:
+        old_weight = current_weights.get(ticker, 0)
+        new_weight = weights.get(ticker, 0)
+        change = new_weight - old_weight
+        print(f"  {ticker}: {old_weight:.2%} → {new_weight:.2%} ({change:+.2%})")
+    
+    total_change = sum(abs(weights.get(ticker, 0) - current_weights.get(ticker, 0)) 
+                      for ticker in available_tickers)
+    print(f"총 비중 변경량: {total_change:.2%} (한계: {weight_change_limit:.2%})")
+    
+    return weights, portfolio_return, portfolio_vol, sharpe
+
 
 def ValueAtRisk(annual_return, annual_vol, risk_free_rate=0.02):
     """
