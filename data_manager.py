@@ -45,7 +45,7 @@ def convert_csv_to_master_json():
         # --- 2-2. Code 생성 ---
         saa_prefix_map = {
             '국내주식': 'SK', '국내채권': 'BK', '해외주식': 'SG',
-            '해외채권': 'BG', '대체투자': 'AI'
+            '해외채권': 'BG', '대체투자': 'AI', '단기자금': 'MM'
         }
         
         unique_pairs = df[['saa_class', 'taa_class']].drop_duplicates().sort_values(
@@ -194,8 +194,11 @@ def create_synthetic_indices():
                 if ticker in price_data and not price_data[ticker].empty:
                     # 데이터가 있는 첫 날짜
                     first_valid_date = price_data[ticker].first_valid_index()
-                    if actual_start_date is None or first_valid_date < actual_start_date:
-                        actual_start_date = first_valid_date
+                    
+                    # ✅ None 값 체크 추가
+                    if first_valid_date is not None:
+                        if actual_start_date is None or first_valid_date < actual_start_date:
+                            actual_start_date = first_valid_date
             
             # 실제 데이터가 전혀 없는 그룹이라면 건너뜁니다.
             if actual_start_date is None:
@@ -243,9 +246,11 @@ def create_synthetic_indices():
 
         except Exception as e:
             print(f"   -> 오류: '{code}' 지수 생성 실패 - {e}")
+            # 디버깅을 위한 추가 정보 출력
+            import traceback
+            traceback.print_exc()
     
     print("\n모든 합성 지수 생성이 완료되었습니다.")
-
 if __name__ == '__main__':
     if convert_csv_to_master_json():
         create_asset_pairs()
