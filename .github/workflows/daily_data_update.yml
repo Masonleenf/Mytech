@@ -56,3 +56,15 @@ jobs:
           token: ${{ secrets.CLOUDTYPE_TOKEN }}
           project: rator9521/mytech  # ← 실제 사용자명/프로젝트명으로 변경하세요
           stage: main
+          yaml: |-
+            name: mytech
+            app: python@3.10
+            build:
+              commands:
+                - pip install -r requirements.txt
+            run:
+              - gunicorn --bind 0.0.0.0:8000 --workers 1 --timeout 120 main:app
+            context:
+              git:
+                url: git@github.com:${{ github.repository }}.git
+                ref: ${{ github.ref }}
