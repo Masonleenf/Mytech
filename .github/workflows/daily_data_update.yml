@@ -54,7 +54,7 @@ jobs:
         uses: cloudtype-github-actions/deploy@v1
         with:
           token: ${{ secrets.CLOUDTYPE_TOKEN }}
-          project: rator9521/mytech  # ← 실제 사용자명/프로젝트명으로 변경하세요
+          project: rator9521/insaa  # ← 실제 사용자명/프로젝트명으로 변경하세요
           stage: main
           yaml: |-
             name: mytech
