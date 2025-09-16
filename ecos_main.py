@@ -293,11 +293,6 @@ class ECOSDataManager:
                             print(f"    ✅ 이미 최신 데이터 (최종: {latest_date})")
                             success_count += 1
                             continue
-                        # 1-3일 차이면 영업일 고려하여 스킵 (주말, 공휴일 고려)
-                        elif date_diff <= 3 and date_diff >= 1:
-                            print(f"    ✅ 영업일 기준 최신 (최종: {latest_date}, 차이: {date_diff}일)")
-                            success_count += 1
-                            continue
                     except:
                         # 날짜 파싱 실패 시 업데이트 진행
                         pass
@@ -360,4 +355,5 @@ def main():
     print(f"\n🏁 프로그램 완료: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 if __name__ == "__main__":
+
     main()
