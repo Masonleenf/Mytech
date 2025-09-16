@@ -41,7 +41,7 @@ jobs:
       
       # 1시간 대기 후 재배포 (새벽 5시)
       - name: 재배포 전 대기 (1시간)
-        run: sleep 3600
+        run: sleep 300
         
       - name: 클라우드타입 저장소 연결
         uses: cloudtype-github-actions/connect@v1
