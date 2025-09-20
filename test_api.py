@@ -283,9 +283,8 @@ def test_portfolio_optimization():
     # 테스트용 요청 데이터
     test_request = {
         "asset_pairs": [
-            {"saa_class": "국내주식", "taa_class": "가치주"},
-            {"saa_class": "대체투자", "taa_class": "SOC"},
-            {"saa_class": "국내채권", "taa_class": "국채종합"}
+            {"saa_class": "국내주식", "taa_class": "지수/코스피"},    # 존재함
+            {"saa_class": "국내채권", "taa_class": "단기국채"}        # 존재함
         ],
         "optimization_params": {
             "method": "efficient_frontier",
@@ -344,57 +343,72 @@ def test_risk_analysis():
     """리스크 분석 테스트"""
     print_separator("8. 리스크 분석 테스트")
     
-    # 테스트용 요청 데이터 (최적화와 동일한 구조)
-    test_request = {
+    # ✅ 먼저 포트폴리오 최적화를 실행해서 performance를 얻음
+    optimize_request = {
         "asset_pairs": [
-            {"saa_class": "국내주식", "taa_class": "가치주"},
-            {"saa_class": "대체투자", "taa_class": "SOC"},
-            {"saa_class": "국내채권", "taa_class": "국채종합"}
+            {"saa_class": "국내주식", "taa_class": "지수/코스피"},
+            {"saa_class": "국내채권", "taa_class": "단기국채"}
         ],
         "optimization_params": {
-            "method": "efficient_frontier",
-            "target_return": 0.03,
-            "risk_free_rate": 0.02,
-            "gamma": 0.5
+            "mode": "MVO",
+            "mvo_objective": "max_sharpe",
+            "target_return": 0.08,
+            "risk_free_rate": 0.02
         }
     }
     
     try:
-        response = requests.post(
-            f"{BASE_URL}/api/risk-analysis", 
-            json=test_request,
+        # 1. 먼저 최적화 실행
+        optimize_response = requests.post(
+            f"{BASE_URL}/api/optimize", 
+            json=optimize_request,
             timeout=30,
             headers={'Content-Type': 'application/json'}
         )
+        
+        if optimize_response.status_code != 200:
+            print(f"최적화 실패: {optimize_response.text}")
+            return False
+        
+        optimize_data = optimize_response.json()
+        
+        # 2. performance 데이터 추출
+        if 'performance' not in optimize_data:
+            print("최적화 결과에 performance가 없습니다.")
+            return False
+        
+        # 3. 리스크 분석 요청 (performance만 전달)
+        risk_request = {
+            "performance": optimize_data['performance'],
+            "risk_free_rate": 0.02
+        }
+        
+        response = requests.post(
+            f"{BASE_URL}/api/risk-analysis", 
+            json=risk_request,
+            timeout=30,
+            headers={'Content-Type': 'application/json'}
+        )
+        
         print_response_details(response, "Risk Analysis")
         
         if response.status_code == 200:
             data = response.json()
             print(f"\n🎯 분석:")
             
-            if 'selected_etfs' in data:
-                print(f"   - 분석 대상 ETF: {data['selected_etfs']}")
-            
             if 'value_at_risk' in data:
                 var_data = data['value_at_risk']
                 print(f"   - VaR 분석 구조: {list(var_data.keys()) if isinstance(var_data, dict) else type(var_data).__name__}")
-                if isinstance(var_data, dict):
-                    for key, value in var_data.items():
-                        print(f"     * {key}: {value} (타입: {type(value).__name__})")
             
             if 'shortfall_risk' in data:
                 shortfall_data = data['shortfall_risk']
                 print(f"   - Shortfall Risk 구조: {list(shortfall_data.keys()) if isinstance(shortfall_data, dict) else type(shortfall_data).__name__}")
-                if isinstance(shortfall_data, dict):
-                    for key, value in shortfall_data.items():
-                        print(f"     * {key}: {value} (타입: {type(value).__name__})")
         
         return response.status_code == 200
         
     except Exception as e:
         print(f"❌ API 호출 실패: {e}")
         return False
-
 # =============================================================================
 # 메인 테스트 실행 함수
 # =============================================================================

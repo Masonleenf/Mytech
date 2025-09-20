@@ -1,51 +1,67 @@
 import pandas as pd
-import os
+from pymongo import MongoClient
 
-DATA_DIR = "data"
-PRICE_DATA_DIR = os.path.join(DATA_DIR, "fund_prices")
+# MongoDB 설정
+MONGO_URI = "mongodb+srv://rator9521_db_user:qwe343434@cluster0.d126rkt.mongodb.net/"
+ETF_DATABASE = "etf_database"
+
+client = MongoClient(MONGO_URI)
+db = client[ETF_DATABASE]
+fund_prices_collection = db['fund_prices']
+
+def get_price_data_from_mongodb(ticker):
+    """MongoDB에서 가격 데이터를 메모리로 직접 로드"""
+    try:
+        doc = fund_prices_collection.find_one({'ticker': ticker})
+        
+        if not doc or 'prices' not in doc:
+            print(f"MongoDB에서 {ticker} 데이터를 찾을 수 없습니다.")
+            return None
+        
+        df = pd.DataFrame(doc['prices'])
+        df['Date'] = pd.to_datetime(df['Date'])
+        df = df.set_index('Date').sort_index()
+        
+        # 중복 제거
+        df = df[~df.index.duplicated(keep='first')]
+        
+        # Adj Close 컬럼 생성
+        df['Close'] = pd.to_numeric(df['Close'], errors='coerce')
+        df['Adj Close'] = df['Close']
+        
+        return df[['Adj Close']]
+        
+    except Exception as e:
+        print(f"MongoDB에서 {ticker} 로드 오류: {e}")
+        return None
 
 def run_backtest(weights: dict):
     """
     주어진 가중치로 포트폴리오의 백테스팅을 수행합니다.
+    MongoDB에서 직접 데이터를 읽어 메모리에서만 처리 (파일 저장 없음)
     """
     tickers = list(weights.keys())
     if not tickers:
         return {"error": "백테스팅할 종목이 없습니다."}
 
-    # 모든 가격 데이터를 읽어와 하나의 데이터프레임으로 합칩니다.
+    print(f"백테스팅 대상: {tickers}")
+
+    # MongoDB에서 가격 데이터 로드
     all_prices = []
     for ticker in tickers:
-        # CSV 파일로 변경
-        file_path = os.path.join(PRICE_DATA_DIR, f"{ticker}.csv")
-        if os.path.exists(file_path):
-            try:
-                # CSV 파일 읽기
-                df = pd.read_csv(
-                    file_path, 
-                    skiprows=3, 
-                    header=None,
-                    names=['Date', 'Price', 'Close', 'High', 'Low', 'Open', 'Volume'],
-                    index_col='Date',
-                    parse_dates=True
-                )
-                
-                # 인덱스 중복 제거
-                df = df[~df.index.duplicated(keep='first')]
-                
-                # Adj Close 컬럼 생성
-                df['Adj Close'] = df['Price']
-                
-                if 'Adj Close' in df.columns:
-                    price_series = df[['Adj Close']].rename(columns={'Adj Close': ticker})
-                    all_prices.append(price_series)
-            except Exception as e:
-                print(f"Error reading {ticker}: {e}")
-                continue
+        price_series = get_price_data_from_mongodb(ticker)
+        
+        if price_series is not None and not price_series.empty:
+            price_series = price_series.rename(columns={'Adj Close': ticker})
+            all_prices.append(price_series)
+        else:
+            print(f"⚠️ {ticker} 데이터 로드 실패")
+            continue
 
     if not all_prices:
         return {"error": "백테스팅에 사용할 가격 데이터가 없습니다."}
 
-    # concat 시 join='outer'와 sort=True 명시
+    # 데이터 병합
     price_df = pd.concat(all_prices, axis=1, join='outer', sort=True)
     
     # NaN 값 처리
@@ -63,6 +79,8 @@ def run_backtest(weights: dict):
     
     if len(price_df) < 2:
         return {"error": "백테스팅 기간의 데이터가 부족합니다."}
+
+    print(f"백테스팅 기간: {start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}")
 
     # 월별 수익률 계산
     monthly_prices = price_df.resample('ME').last()

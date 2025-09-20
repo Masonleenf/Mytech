@@ -1,8 +1,8 @@
-name: Daily ETF Data Update
+name: Daily MongoDB Data Update
 on:
   workflow_dispatch: # 수동 실행을 위한 옵션
   schedule:
-    - cron: '0 19 * * *' # 매일 19:00 UTC (한국 시간 새벽 4시) - 별표 5개로 수정
+    - cron: '0 19 * * *' # 매일 19:00 UTC (한국 시간 새벽 4시)
 jobs:
   update-data:
     runs-on: ubuntu-latest
@@ -20,39 +20,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           
-      - name: Run ECOS data collection
-        run: python ecos_main.py
+      - name: Run ECOS MongoDB data collection
+        run: python ecos_main_mongo.py
         
       - name: Run ETF data manager script
         run: python data_manager.py
         
-      - name: Commit and push changes
+      - name: Data update completed
         run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add data/
-          # 변경 사항이 있을 때만 커밋하도록 설정
-          if ! git diff --staged --quiet; then
-            git commit -m "chore: Auto-update ETF and ECOS data"
-            git push
-          else
-            echo "No changes to commit."
-          fi
-      
-      # 1시간 대기 후 재배포 (새벽 5시)
-      - name: 재배포 전 대기 (1시간)
-        run: sleep 300
-        
-      - name: 클라우드타입 저장소 연결
-        uses: cloudtype-github-actions/connect@v1
-        with:
-          token: ${{ secrets.CLOUDTYPE_TOKEN }}
-          ghtoken: ${{ secrets.GHP_TOKEN }}
-          scope: rator9521  # ← 실제 클라우드타입 사용자명으로 변경하세요
-        
-      - name: 클라우드타입 자동 재배포
-        uses: cloudtype-github-actions/deploy@v1
-        with:
-          token: ${{ secrets.CLOUDTYPE_TOKEN }}
-          project: rator9521/insaa  # ← 실제 사용자명/프로젝트명으로 변경하세요
-          stage: main
+          echo "✅ MongoDB data update completed successfully!"
+          echo "📊 ECOS data stored in MongoDB"
+          echo "📈 ETF data processed"
