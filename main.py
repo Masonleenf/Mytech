@@ -7,6 +7,7 @@ import os
 import pandas as pd
 from datetime import datetime
 from pymongo import MongoClient
+import beg_optimize
 
 app = Flask(__name__)
 CORS(app)
@@ -249,7 +250,7 @@ def get_etf_price_info(ticker):
         return None
 
 def perform_portfolio_optimization(asset_pairs, params):
-    """공통 포트폴리오 최적화 로직 - 리밸런싱 모드 지원"""
+    """공통 포트폴리오 최적화 로직 - Beginner, MVO, RiskParity, Rebalancing 모드 지원"""
     try:
         # MongoDB에서 ETF 마스터 로드
         from pymongo import MongoClient
@@ -259,6 +260,44 @@ def perform_portfolio_optimization(asset_pairs, params):
         db = client["etf_database"]
         etf_master_collection = db['etf_master']
         
+        # 모드 확인
+        mode = params.get("mode", "MVO")
+        
+        print(f"============================================================")
+        print(f"📥 받은 요청 데이터:")
+        print(f"  - mode: {mode}")
+        print(f"  - asset_pairs: {asset_pairs}")
+        print(f"  - optimization_params: {params}")
+        print(f"============================================================")
+        
+        # ==================== Beginner 모드 ====================
+        if mode == "Beginner":
+            print("\n" + "="*60)
+            print(" Beginner 모드 - beg_optimize 호출 ".center(60, "="))
+            print("="*60)
+            
+            style_index = params.get("style_index")
+            risk_index = params.get("risk_index")
+            
+            if style_index is None or risk_index is None:
+                raise ValueError("Beginner 모드에는 style_index와 risk_index가 필요합니다.")
+            
+            print(f"  - style_index: {style_index}")
+            print(f"  - risk_index: {risk_index}")
+            
+            # beg_optimize.py의 get_beginner_portfolio() 호출
+            # 모든 비즈니스 로직은 beg_optimize.py에서 처리
+            selected_tickers, weights, performance = beg_optimize.get_beginner_portfolio(
+                style_index=style_index,
+                risk_index=risk_index
+            )
+            
+            print(f"✅ beg_optimize 결과 수신: {len(selected_tickers)}개 ETF")
+            
+            return selected_tickers, weights, performance
+        
+        # ==================== 이하 기존 모드 (MVO, RiskParity, Rebalancing) ====================
+        
         # MongoDB에서 데이터 로드
         etf_data = list(etf_master_collection.find({}, {'_id': 0}))
         if not etf_data:
@@ -267,15 +306,7 @@ def perform_portfolio_optimization(asset_pairs, params):
         etf_df = pd.DataFrame(etf_data)
         
         # 리밸런싱 모드 확인
-        mode = params.get("mode", "MVO")
         current_weights = params.get("current_weights", {})
-        
-        print(f"============================================================")
-        print(f"📥 받은 요청 데이터:")
-        print(f"  - asset_pairs: {asset_pairs}")
-        print(f"  - optimization_params: {params}")
-        print(f"  - current_weights: {current_weights}")
-        print(f"============================================================")
         
         if mode == "Rebalancing" and current_weights:
             print(f"✅ current_weights를 params에 추가: {current_weights}")
@@ -336,8 +367,8 @@ def perform_portfolio_optimization(asset_pairs, params):
             return result_codes, weights, performance
             
         else:
-            # 일반 최적화 모드
-            print(f"🔍 일반 최적화 모드")
+            # 일반 최적화 모드 (MVO, RiskParity)
+            print(f"🔍 일반 최적화 모드: {mode}")
             selected_codes = []
             
             for pair in asset_pairs:
@@ -540,24 +571,29 @@ def get_etf_detail_info(ticker):
 def optimize_endpoint():
     data = request.get_json()
     
-    if not data or "asset_pairs" not in data or "optimization_params" not in data:
-        return jsonify({"status": "error", "message": "'asset_pairs'와 'optimization_params'가 모두 필요합니다."}), 400
+    if not data or "optimization_params" not in data:
+        return jsonify({"status": "error", "message": "'optimization_params'가 필요합니다."}), 400
+    
+    params = data.get("optimization_params")
+    mode = params.get("mode", "MVO")
+    
+    # Beginner 모드는 asset_pairs 없이도 동작
+    if mode != "Beginner" and "asset_pairs" not in data:
+        return jsonify({"status": "error", "message": "'asset_pairs'가 필요합니다."}), 400
+    
+    asset_pairs = data.get("asset_pairs", [])
     
     print("\n" + "="*60)
-    print("📥 받은 요청 데이터:")
-    print(f"  - asset_pairs: {data.get('asset_pairs')}")
-    print(f"  - optimization_params: {data.get('optimization_params')}")
-    print(f"  - current_weights: {data.get('current_weights', {})}")
+    print(f"🔥 받은 요청 데이터:")
+    print(f"  - mode: {mode}")
+    if mode == "Beginner":
+        print(f"  - style_index: {params.get('style_index')}")
+        print(f"  - risk_index: {params.get('risk_index')}")
+    else:
+        print(f"  - asset_pairs: {asset_pairs}")
+        print(f"  - optimization_params: {params}")
     print("="*60 + "\n")
     
-    asset_pairs = data.get("asset_pairs")
-    params = data.get("optimization_params")
-    current_weights = data.get("current_weights", {})
-    
-    if current_weights:
-        params["current_weights"] = current_weights
-        print(f"✅ current_weights를 params에 추가: {current_weights}")
-
     try:
         selected_tickers, weights, performance = perform_portfolio_optimization(asset_pairs, params)
         
@@ -569,21 +605,25 @@ def optimize_endpoint():
                 etf_details.append({
                     'ticker': ticker,
                     'name': etf_info.get('한글종목약명', ''),
-                    'code': etf_info.get('code', ''),   
+                    'code': etf_info.get('code', ''),
                     'saa_class': etf_info.get('saa_class', ''),
                     'taa_class': etf_info.get('taa_class', '')
                 })
-        
-        backtesting_results = backtester.run_backtest(weights)
         
         result = {
             "selected_etfs": selected_tickers,
             "etf_details": etf_details,
             "weights": [{"ticker": t, "weight": f"{w*100:.2f}%"} for t, w in weights.items()],
-            "performance": performance,
-            "backtesting": backtesting_results
+            "performance": performance
         }
+        
+        # Beginner 모드는 backtesting 제외
+        if mode != "Beginner":
+            backtesting_results = backtester.run_backtest(weights)
+            result["backtesting"] = backtesting_results
+        
         return jsonify(result), 200
+        
     except Exception as e:
         return jsonify({"status": "error", "message": f"포트폴리오 최적화 중 오류 발생: {str(e)}"}), 500
 
