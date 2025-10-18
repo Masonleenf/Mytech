@@ -8,6 +8,7 @@ import pandas as pd
 from datetime import datetime
 from pymongo import MongoClient
 import beg_optimize
+import market_ranking
 
 app = Flask(__name__)
 CORS(app)
@@ -660,6 +661,64 @@ def calculate_comprehensive_risk_endpoint():
         import traceback
         traceback.print_exc()
         return jsonify({"status": "error", "message": f"종합 리스크 분석 중 서버 오류 발생: {e}"}), 500
+
+@app.route('/api/market-rankings/<category>', methods=['GET'])
+def get_market_rankings(category):
+    """
+    마켓 서머리 - 자산군/ETF 등락률 순위
+    
+    Parameters:
+    - category: 'asset' (자산군) 또는 'etf'
+    - timeframe: 쿼리 파라미터 (당일, 1주일, 1달, 3개월, 6개월, 1년, 3년)
+    
+    Returns:
+    {
+        "status": "success",
+        "category": "asset" | "etf",
+        "timeframe": "1달",
+        "top": [...],  # 상위 10개
+        "bottom": [...]  # 하위 10개
+    }
+    """
+    try:
+        # 쿼리 파라미터에서 timeframe 가져오기 (기본값: 1달)
+        timeframe = request.args.get('timeframe', '1달')
+        
+        # 유효한 타임프레임인지 확인
+        valid_timeframes = ['당일', '1주일', '1달', '3개월', '6개월', '1년', '3년']
+        if timeframe not in valid_timeframes:
+            return jsonify({
+                "status": "error",
+                "message": f"유효하지 않은 타임프레임입니다. 가능한 값: {', '.join(valid_timeframes)}"
+            }), 400
+        
+        # 카테고리별 순위 계산
+        if category == 'asset':
+            result = market_ranking.get_asset_class_rankings(timeframe)
+        elif category == 'etf':
+            result = market_ranking.get_etf_rankings(timeframe)
+        else:
+            return jsonify({
+                "status": "error",
+                "message": "유효하지 않은 카테고리입니다. 'asset' 또는 'etf'를 사용하세요."
+            }), 400
+        
+        if result['status'] == 'error':
+            return jsonify(result), 500
+        
+        # 카테고리 정보 추가
+        result['category'] = category
+        
+        return jsonify(result), 200
+        
+    except Exception as e:
+        print(f"❌ 마켓 순위 조회 오류: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": f"마켓 순위 조회 중 오류 발생: {str(e)}"
+        }), 500
 
 if __name__ == '__main__':
     print("=" * 60)
