@@ -331,7 +331,7 @@ def calculate_and_store_market_summary():
             return None
     
     timeframe_days = {
-        '당일': 1,
+        '당일': 2,
         '1주일': 5,
         '1달': 21,
         '3개월': 63,
