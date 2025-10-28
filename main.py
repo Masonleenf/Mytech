@@ -8,7 +8,6 @@ import pandas as pd
 from datetime import datetime
 from pymongo import MongoClient
 import beg_optimize
-import market_ranking
 
 app = Flask(__name__)
 CORS(app)
@@ -665,24 +664,13 @@ def calculate_comprehensive_risk_endpoint():
 @app.route('/api/market-rankings/<category>', methods=['GET'])
 def get_market_rankings(category):
     """
-    마켓 서머리 - 자산군/ETF 등락률 순위
-    
-    Parameters:
-    - category: 'asset' (자산군) 또는 'etf'
-    - timeframe: 쿼리 파라미터 (당일, 1주일, 1달, 3개월, 6개월, 1년, 3년)
-    
-    Returns:
-    {
-        "status": "success",
-        "category": "asset" | "etf",
-        "timeframe": "1달",
-        "top": [...],  # 상위 10개
-        "bottom": [...]  # 하위 10개
-    }
+    마켓 서머리 - MongoDB에서 사전 계산된 순위 조회
     """
     try:
-        # 쿼리 파라미터에서 timeframe 가져오기 (기본값: 1달)
+        # 쿼리 파라미터에서 timeframe 가져오기
         timeframe = request.args.get('timeframe', '1달')
+        
+        print(f"📊 마켓 순위 요청: category={category}, timeframe={timeframe}")
         
         # 유효한 타임프레임인지 확인
         valid_timeframes = ['당일', '1주일', '1달', '3개월', '6개월', '1년', '3년']
@@ -692,22 +680,43 @@ def get_market_rankings(category):
                 "message": f"유효하지 않은 타임프레임입니다. 가능한 값: {', '.join(valid_timeframes)}"
             }), 400
         
-        # 카테고리별 순위 계산
-        if category == 'asset':
-            result = market_ranking.get_asset_class_rankings(timeframe)
-        elif category == 'etf':
-            result = market_ranking.get_etf_rankings(timeframe)
-        else:
+        # 카테고리 검증
+        if category not in ['asset', 'etf']:
             return jsonify({
                 "status": "error",
                 "message": "유효하지 않은 카테고리입니다. 'asset' 또는 'etf'를 사용하세요."
             }), 400
         
-        if result['status'] == 'error':
-            return jsonify(result), 500
+        # MongoDB에서 사전 계산된 데이터 조회
+        market_summary_collection = etf_db['market_summary']
         
-        # 카테고리 정보 추가
-        result['category'] = category
+        summary_data = market_summary_collection.find_one(
+            {'timeframe': timeframe},
+            {'_id': 0}  # _id 필드 제외
+        )
+        
+        if not summary_data:
+            print(f"❌ '{timeframe}' 타임프레임 데이터 없음")
+            return jsonify({
+                "status": "error",
+                "message": f"'{timeframe}' 타임프레임의 데이터를 찾을 수 없습니다. 데이터 업데이트가 필요합니다."
+            }), 404
+        
+        print(f"✅ MongoDB에서 데이터 조회 성공")
+        
+        # 카테고리별 데이터 추출
+        category_data = summary_data.get(category, {})
+        
+        result = {
+            "status": "success",
+            "category": category,
+            "timeframe": timeframe,
+            "updated_at": summary_data.get('updated_at').isoformat() if summary_data.get('updated_at') else None,
+            "top": category_data.get('top', []),
+            "bottom": category_data.get('bottom', [])
+        }
+        
+        print(f"✅ 응답 데이터: top={len(result['top'])}개, bottom={len(result['bottom'])}개")
         
         return jsonify(result), 200
         

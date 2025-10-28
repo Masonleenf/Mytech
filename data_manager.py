@@ -303,6 +303,194 @@ def create_synthetic_indices():
     
     print("\n✅ 합성 지수 생성 완료!")
 
+def calculate_and_store_market_summary():
+    """
+    매일 자산군/ETF 순위를 계산하여 MongoDB에 저장
+    """
+    print("\n" + "="*60)
+    print("마켓 서머리 순위 계산 시작...")
+    print("="*60)
+    
+    from datetime import datetime
+    import pandas as pd
+    
+    COLLECTION_MARKET_SUMMARY = "market_summary"
+    
+    def calculate_return_for_period(prices_df, days):
+        """특정 기간의 수익률 계산"""
+        try:
+            if len(prices_df) < days:
+                return None
+            
+            current_price = prices_df.iloc[-1]
+            past_price = prices_df.iloc[-days]
+            
+            return_pct = ((current_price - past_price) / past_price) * 100
+            return round(return_pct, 2)
+        except:
+            return None
+    
+    timeframe_days = {
+        '당일': 1,
+        '1주일': 5,
+        '1달': 21,
+        '3개월': 63,
+        '6개월': 126,
+        '1년': 252,
+        '3년': 756
+    }
+    
+    # 기존 데이터 삭제
+    db[COLLECTION_MARKET_SUMMARY].delete_many({})
+    print("기존 마켓 서머리 데이터 삭제 완료")
+    
+    total_saved = 0
+    
+    # 각 타임프레임별로 계산
+    for timeframe, days in timeframe_days.items():
+        print(f"\n📊 [{timeframe}] 순위 계산 중...")
+        
+        # ========== 자산군 순위 계산 ==========
+        print(f"  - 자산군 순위 계산...")
+        asset_rankings = []
+        
+        all_indices = db[COLLECTION_SYNTHETIC_INDICES].find({})
+        
+        for index_doc in all_indices:
+            code = index_doc.get('code')
+            data = index_doc.get('data', [])
+            
+            if not data or len(data) < days:
+                continue
+            
+            df = pd.DataFrame(data)
+            df['Date'] = pd.to_datetime(df['Date'])
+            df = df.sort_values('Date')
+            df['close'] = pd.to_numeric(df['close'], errors='coerce')
+            df = df.dropna(subset=['close'])
+            
+            if len(df) < days:
+                continue
+            
+            return_pct = calculate_return_for_period(df['close'], days)
+            
+            if return_pct is None:
+                continue
+            
+            master_info = db[COLLECTION_ETF_MASTER].find_one({'code': code})
+            
+            if master_info:
+                saa = master_info.get('saa_class', '미분류')
+                taa = master_info.get('taa_class', '미분류')
+                
+                asset_rankings.append({
+                    'code': code,
+                    'saa': saa,
+                    'taa': taa,
+                    'name': f"{saa} / {taa}",
+                    'return': return_pct
+                })
+        
+        # 수익률 기준 정렬
+        asset_rankings_sorted = sorted(asset_rankings, key=lambda x: x['return'], reverse=True)
+        
+        # 상위 10개, 하위 10개
+        asset_top_10 = asset_rankings_sorted[:10] if len(asset_rankings_sorted) >= 10 else asset_rankings_sorted
+        asset_bottom_10 = asset_rankings_sorted[-10:] if len(asset_rankings_sorted) >= 10 else []
+        
+        # 순위 매기기
+        for idx, item in enumerate(asset_top_10, 1):
+            item['rank'] = idx
+        
+        for idx, item in enumerate(asset_bottom_10, 1):
+            item['rank'] = idx
+        
+        print(f"    ✅ 자산군: 상위 {len(asset_top_10)}개, 하위 {len(asset_bottom_10)}개")
+        
+        # ========== ETF 순위 계산 ==========
+        print(f"  - ETF 순위 계산...")
+        etf_rankings = []
+        
+        all_etfs = db[COLLECTION_ETF_MASTER].find({})
+        
+        for etf in all_etfs:
+            ticker = etf.get('ticker')
+            name = etf.get('한글종목약명', etf.get('한글종목명', ticker))
+            
+            price_doc = db[COLLECTION_FUND_PRICES].find_one({'ticker': ticker})
+            
+            if not price_doc or 'prices' not in price_doc:
+                continue
+            
+            prices = price_doc['prices']
+            if len(prices) < days:
+                continue
+            
+            df = pd.DataFrame(prices)
+            df['Date'] = pd.to_datetime(df['Date'])
+            df = df.sort_values('Date')
+            df['Close'] = pd.to_numeric(df['Close'], errors='coerce')
+            df = df.dropna(subset=['Close'])
+            
+            if len(df) < days:
+                continue
+            
+            return_pct = calculate_return_for_period(df['Close'], days)
+            
+            if return_pct is None:
+                continue
+            
+            current_price = int(df['Close'].iloc[-1])
+            
+            etf_rankings.append({
+                'ticker': ticker,
+                'name': name,
+                'price': f"{current_price:,}원",
+                'return': return_pct
+            })
+        
+        # 수익률 기준 정렬
+        etf_rankings_sorted = sorted(etf_rankings, key=lambda x: x['return'], reverse=True)
+        
+        # 상위 10개, 하위 10개
+        etf_top_10 = etf_rankings_sorted[:10] if len(etf_rankings_sorted) >= 10 else etf_rankings_sorted
+        etf_bottom_10 = etf_rankings_sorted[-10:] if len(etf_rankings_sorted) >= 10 else []
+        
+        # 순위 매기기
+        for idx, item in enumerate(etf_top_10, 1):
+            item['rank'] = idx
+        
+        for idx, item in enumerate(etf_bottom_10, 1):
+            item['rank'] = idx
+        
+        print(f"    ✅ ETF: 상위 {len(etf_top_10)}개, 하위 {len(etf_bottom_10)}개")
+        
+        # ========== MongoDB에 저장 ==========
+        summary_data = {
+            'timeframe': timeframe,
+            'updated_at': datetime.now(),
+            'asset': {
+                'top': asset_top_10,
+                'bottom': asset_bottom_10
+            },
+            'etf': {
+                'top': etf_top_10,
+                'bottom': etf_bottom_10
+            }
+        }
+        
+        db[COLLECTION_MARKET_SUMMARY].insert_one(summary_data)
+        total_saved += 1
+        print(f"  ✅ [{timeframe}] 저장 완료")
+    
+    # 인덱스 생성 (빠른 조회를 위해)
+    db[COLLECTION_MARKET_SUMMARY].create_index([("timeframe", 1)])
+    
+    print("\n" + "="*60)
+    print(f"✅ 마켓 서머리 순위 계산 완료! (총 {total_saved}개 타임프레임)")
+    print("="*60)
+
+# ========== 메인 실행 부분 수정 ==========
 if __name__ == '__main__':
     print("=" * 60)
     print("ETF 데이터 관리 시스템 (MongoDB 버전)")
@@ -312,6 +500,9 @@ if __name__ == '__main__':
         create_asset_pairs()
         update_etf_prices_to_mongodb()
         create_synthetic_indices()
+        
+        # ✨ 마켓 서머리 순위 계산 추가
+        calculate_and_store_market_summary()
     
     print("\n" + "=" * 60)
     print("모든 작업 완료!")
