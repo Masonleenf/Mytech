@@ -10,6 +10,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
         
+      - name: Keepalive Workflow
+        uses: gautamkrishnar/keepalive-workflow@v2
+        
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
