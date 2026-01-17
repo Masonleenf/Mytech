@@ -1,43 +1,44 @@
+"""
+main.py
+Flask API 서버 - 리팩토링 버전
+"""
+
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-import optimizer as optimizer
-import backtester as backtester
 import json
 import os
 import pandas as pd
 from datetime import datetime
-from pymongo import MongoClient
+import traceback
+
+import config
+from db import db_manager
+import optimizer
+import backtester
 import beg_optimize
+import dividend_optimizer
 
 app = Flask(__name__)
 CORS(app)
 
-# ============= MongoDB 설정 =============
-MONGO_URI = "mongodb+srv://rator9521_db_user:qwe343434@cluster0.d126rkt.mongodb.net/"
-ETF_DATABASE = "etf_database"
-ECOS_DATABASE = "ecos_database"
 
-client = MongoClient(MONGO_URI)
-etf_db = client[ETF_DATABASE]
-ecos_db = client[ECOS_DATABASE]
+# ============= 헬퍼 함수 =============
 
-etf_master_collection = etf_db['etf_master']
-asset_pairs_collection = etf_db['asset_pairs']
-fund_prices_collection = etf_db['fund_prices']
-synthetic_indices_collection = etf_db['synthetic_indices']
-ecos_prices_collection = ecos_db['ecos_prices']
-
-DATA_DIR = "data"
-LIST_CSV_PATH = os.path.join(DATA_DIR, "list.csv")
+# ✅ 모듈 레벨 캐시 (CSV 반복 로드 방지)
+_list_csv_cache = None
 
 def load_list_csv():
-    """list.csv 파일을 로드하여 item_code1과 통계 정보 매핑"""
+    """list.csv 파일을 로드하여 item_code1과 통계 정보 매핑 (캐시 활용)"""
+    global _list_csv_cache
+    if _list_csv_cache is not None:
+        return _list_csv_cache
+    
     try:
-        if not os.path.exists(LIST_CSV_PATH):
-            print(f"⚠ list.csv 파일이 없습니다: {LIST_CSV_PATH}")
+        if not os.path.exists(config.LIST_CSV_PATH):
+            print(f"⚠ list.csv 파일이 없습니다: {config.LIST_CSV_PATH}")
             return {}
         
-        df = pd.read_csv(LIST_CSV_PATH)
+        df = pd.read_csv(config.LIST_CSV_PATH)
         df.columns = df.columns.str.strip()
         
         mapping = {}
@@ -50,24 +51,25 @@ def load_list_csv():
                 'unit': str(row['단위']).strip()
             }
         
+        _list_csv_cache = mapping  # ✅ 캐시에 저장
         return mapping
         
     except Exception as e:
         print(f"⚠ list.csv 로드 실패: {e}")
         return {}
 
+
 def get_ecos_data_from_mongodb(item_code1):
     """MongoDB에서 특정 item_code1의 최신 2일 데이터 조회"""
     try:
-        doc = ecos_prices_collection.find_one({'item_code1': item_code1})
+        doc = db_manager.ecos_prices.find_one({'item_code1': item_code1})
         
         if not doc or 'prices' not in doc or not doc['prices']:
             return None
         
         df = pd.DataFrame(doc['prices'])
         df['Date'] = pd.to_datetime(df['Date'], format='%Y%m%d', errors='coerce')
-        df = df.dropna(subset=['Date', 'Close'])
-        df = df.sort_values('Date')
+        df = df.dropna(subset=['Date', 'Close']).sort_values('Date')
         
         if len(df) < 1:
             return None
@@ -88,8 +90,9 @@ def get_ecos_data_from_mongodb(item_code1):
         
         return latest, previous
         
-    except Exception as e:
+    except Exception:
         return None
+
 
 def get_latest_market_data(stat_code, item_code1, list_mapping):
     """특정 통계의 최신 2일 데이터 조회"""
@@ -98,8 +101,8 @@ def get_latest_market_data(stat_code, item_code1, list_mapping):
             return None
         
         stat_info = list_mapping[item_code1]
-        
         mongodb_result = get_ecos_data_from_mongodb(item_code1)
+        
         if not mongodb_result:
             return None
         
@@ -111,12 +114,7 @@ def get_latest_market_data(stat_code, item_code1, list_mapping):
         change = current_value - previous_value
         change_percent = (change / previous_value * 100) if previous_value != 0 else 0
         
-        if change > 0:
-            trend = 'up'
-        elif change < 0:
-            trend = 'down'
-        else:
-            trend = 'neutral'
+        trend = 'up' if change > 0 else ('down' if change < 0 else 'neutral')
         
         return {
             'name': stat_info['name'],
@@ -130,19 +128,16 @@ def get_latest_market_data(stat_code, item_code1, list_mapping):
             'item_code1': item_code1
         }
         
-    except Exception as e:
+    except Exception:
         return None
+
 
 def format_market_indicators():
     """시장지표 데이터를 프론트엔드 형식으로 변환"""
     list_mapping = load_list_csv()
     
     if not list_mapping:
-        return {
-            'interest_rates': [],
-            'stock_indices': [],
-            'exchange_rates': []
-        }
+        return {'interest_rates': [], 'stock_indices': [], 'exchange_rates': []}
     
     market_indicators = {
         'interest_rates': [
@@ -185,8 +180,7 @@ def format_market_indicators():
             if data:
                 if category == 'interest_rates':
                     value_display = f"{float(data['value']):.2f}%"
-                    change_bp = float(data['change']) * 100
-                    change_display = f"{change_bp:+.0f}bp"
+                    change_display = f"{float(data['change']) * 100:+.0f}bp"
                 elif category == 'stock_indices':
                     value_display = f"{float(data['value']):,.1f}"
                     change_display = f"{float(data['change']):+.1f}"
@@ -194,7 +188,7 @@ def format_market_indicators():
                     value_display = f"{float(data['value']):,.2f}원"
                     change_display = f"{float(data['change']):+.1f}"
                 
-                formatted_data = {
+                category_data.append({
                     'id': f"{stat_code}_{item_code1}",
                     'icon': icon_type,
                     'name': display_name,
@@ -205,18 +199,17 @@ def format_market_indicators():
                     'trend': data['trend'],
                     'unit': data.get('unit', ''),
                     'lastUpdated': data['lastUpdated']
-                }
-                
-                category_data.append(formatted_data)
+                })
         
         result[category] = category_data
     
     return result
 
+
 def get_etf_price_info(ticker):
     """MongoDB에서 ETF 가격 정보 조회"""
     try:
-        doc = fund_prices_collection.find_one({'ticker': ticker})
+        doc = db_manager.fund_prices.find_one({'ticker': ticker})
         
         if not doc or 'prices' not in doc or not doc['prices']:
             return None
@@ -246,118 +239,60 @@ def get_etf_price_info(ticker):
             "last_updated": latest_data.index[-1].strftime('%Y-%m-%d')
         }
         
-    except Exception as e:
+    except Exception:
         return None
 
+
 def perform_portfolio_optimization(asset_pairs, params):
-    """공통 포트폴리오 최적화 로직 - Beginner, MVO, RiskParity, Rebalancing 모드 지원"""
+    """공통 포트폴리오 최적화 로직"""
     try:
-        # MongoDB에서 ETF 마스터 로드
-        from pymongo import MongoClient
-        
-        MONGO_URI = "mongodb+srv://rator9521_db_user:qwe343434@cluster0.d126rkt.mongodb.net/"
-        client = MongoClient(MONGO_URI)
-        db = client["etf_database"]
-        etf_master_collection = db['etf_master']
-        
-        # 모드 확인
         mode = params.get("mode", "MVO")
         
-        print(f"============================================================")
-        print(f"📥 받은 요청 데이터:")
-        print(f"  - mode: {mode}")
-        print(f"  - asset_pairs: {asset_pairs}")
-        print(f"  - optimization_params: {params}")
-        print(f"============================================================")
+        print("=" * 60)
+        print(f"📥 받은 요청 데이터: mode={mode}")
+        print("=" * 60)
         
-        # ==================== Beginner 모드 ====================
+        # Beginner 모드
         if mode == "Beginner":
-            print("\n" + "="*60)
-            print(" Beginner 모드 - beg_optimize 호출 ".center(60, "="))
-            print("="*60)
-            
             style_index = params.get("style_index")
             risk_index = params.get("risk_index")
             
             if style_index is None or risk_index is None:
                 raise ValueError("Beginner 모드에는 style_index와 risk_index가 필요합니다.")
             
-            print(f"  - style_index: {style_index}")
-            print(f"  - risk_index: {risk_index}")
-            
-            # beg_optimize.py의 get_beginner_portfolio() 호출
-            # 모든 비즈니스 로직은 beg_optimize.py에서 처리
-            selected_tickers, weights, performance = beg_optimize.get_beginner_portfolio(
-                style_index=style_index,
-                risk_index=risk_index
-            )
-            
-            print(f"✅ beg_optimize 결과 수신: {len(selected_tickers)}개 ETF")
-            
-            return selected_tickers, weights, performance
+            return beg_optimize.get_beginner_portfolio(style_index, risk_index)
         
-        # ==================== 이하 기존 모드 (MVO, RiskParity, Rebalancing) ====================
-        
-        # MongoDB에서 데이터 로드
-        etf_data = list(etf_master_collection.find({}, {'_id': 0}))
+        # 일반 모드 (MVO, RiskParity, Rebalancing)
+        etf_data = list(db_manager.etf_master.find({}, {'_id': 0}))
         if not etf_data:
             raise FileNotFoundError("ETF 마스터 데이터가 없습니다.")
         
         etf_df = pd.DataFrame(etf_data)
-        
-        # 리밸런싱 모드 확인
         current_weights = params.get("current_weights", {})
         
+        # 리밸런싱 모드
         if mode == "Rebalancing" and current_weights:
-            print(f"✅ current_weights를 params에 추가: {current_weights}")
-            
-            # 리밸런싱 모드: ticker와 code 분리
             holding_tickers = list(current_weights.keys())
-            
-            print(f"🔍 리밸런싱 모드 - 혼합 방식")
-            print(f"  📊 보유 종목 (ticker): {holding_tickers}")
-            
-            # 추가 자산 처리 (asset_pairs에서 새로운 자산만)
             selected_codes = []
-            added_assets = []
+            code_to_ticker_map = {}
             
             for pair in asset_pairs:
-                saa = pair.get("saa_class")
-                taa = pair.get("taa_class")
-                
+                saa, taa = pair.get("saa_class"), pair.get("taa_class")
                 if saa == "EXISTING":
-                    continue  # 기존 보유 종목은 이미 holding_tickers에 있음
+                    continue
                     
-                matched_etf = etf_df[
-                    (etf_df['saa_class'] == saa) & 
-                    (etf_df['taa_class'] == taa)
-                ]
+                matched_etf = etf_df[(etf_df['saa_class'] == saa) & (etf_df['taa_class'] == taa)]
                 
                 if not matched_etf.empty:
                     code = matched_etf['code'].iloc[0]
                     ticker = matched_etf['ticker'].iloc[0]
                     selected_codes.append(code)
-                    added_assets.append(f"{saa} - {taa}")
-                    print(f"  ➕ 추가 자산: [{saa} - {taa}] → code: {code}, ticker: {ticker}")
-            
-            print(f"  📈 추가 자산 (code): {selected_codes}")
-            
-            # code_to_ticker_map 생성
-            code_to_ticker_map = {}
-            for code in selected_codes:
-                matched_etf = etf_df[etf_df['code'] == code]
-                if not matched_etf.empty:
-                    ticker = matched_etf['ticker'].iloc[0]
                     code_to_ticker_map[code] = ticker
             
-            print(f"==================================================")
-            
-            # 리밸런싱 전용 함수 호출
             weights, performance = optimizer.get_optimized_portfolio_rebalancing(
                 holding_tickers, selected_codes, code_to_ticker_map, params
             )
             
-            # selected_codes는 결과 표시용 (ticker 형태로 변환)
             result_codes = holding_tickers.copy()
             for code in selected_codes:
                 ticker = code_to_ticker_map.get(code, f"{code}.KS")
@@ -365,62 +300,42 @@ def perform_portfolio_optimization(asset_pairs, params):
                     result_codes.append(ticker)
             
             return result_codes, weights, performance
+        
+        # 일반 최적화 모드
+        selected_codes = []
+        code_to_ticker_map = {}
+        
+        for pair in asset_pairs:
+            saa, taa = pair.get("saa_class"), pair.get("taa_class")
+            matched_etf = etf_df[(etf_df['saa_class'] == saa) & (etf_df['taa_class'] == taa)]
             
-        else:
-            # 일반 최적화 모드 (MVO, RiskParity)
-            print(f"🔍 일반 최적화 모드: {mode}")
-            selected_codes = []
-            
-            for pair in asset_pairs:
-                saa = pair.get("saa_class")
-                taa = pair.get("taa_class")
-                
-                matched_etf = etf_df[
-                    (etf_df['saa_class'] == saa) & 
-                    (etf_df['taa_class'] == taa)
-                ]
-                
-                if not matched_etf.empty:
-                    code = matched_etf['code'].iloc[0]
-                    selected_codes.append(code)
-                    print(f"  조합 ['{saa}' - '{taa}'] 대표 코드: {code}")
-                else:
-                    print(f"  경고: 조합 ['{saa}' - '{taa}']에 해당하는 ETF가 없습니다.")
-            
-            if len(selected_codes) < 2:
-                raise ValueError("최적화를 위해 2개 이상의 종목이 필요합니다.")
-            
-            # code_to_ticker_map 생성
-            code_to_ticker_map = {}
-            for code in selected_codes:
-                matched_etf = etf_df[etf_df['code'] == code]
-                if not matched_etf.empty:
-                    ticker = matched_etf['ticker'].iloc[0]
-                    code_to_ticker_map[code] = ticker
-            
-            print(f"  📈 선택된 코드: {selected_codes}")
-            
-            # 일반 최적화 함수 호출
-            weights, performance = optimizer.get_optimized_portfolio(
-                selected_codes, params, code_to_ticker_map
-            )
-            
-            # 결과 표시용으로 ticker로 변환
-            result_codes = []
-            for code in selected_codes:
-                ticker = code_to_ticker_map.get(code, f"{code}.KS")
-                result_codes.append(ticker)
-            
-            return result_codes, weights, performance
+            if not matched_etf.empty:
+                code = matched_etf['code'].iloc[0]
+                selected_codes.append(code)
+                code_to_ticker_map[code] = matched_etf['ticker'].iloc[0]
+        
+        if len(selected_codes) < 2:
+            raise ValueError("최적화를 위해 2개 이상의 종목이 필요합니다.")
+        
+        weights, performance = optimizer.get_optimized_portfolio(
+            selected_codes, params, code_to_ticker_map
+        )
+        
+        result_codes = [code_to_ticker_map.get(code, f"{code}.KS") for code in selected_codes]
+        
+        return result_codes, weights, performance
         
     except Exception as e:
-        import traceback
         traceback.print_exc()
         raise e
+
+
+# ============= API 엔드포인트 =============
 
 @app.route('/health', methods=['GET'])
 def health_check():
     return jsonify({"status": "healthy", "message": "API 서버가 정상 작동 중입니다."}), 200
+
 
 @app.route('/api/market-indicators', methods=['GET'])
 def get_market_indicators():
@@ -432,10 +347,8 @@ def get_market_indicators():
             "timestamp": datetime.now().isoformat()
         }), 200
     except Exception as e:
-        return jsonify({
-            "status": "error", 
-            "message": f"시장지표 조회 중 오류 발생: {str(e)}"
-        }), 500
+        return jsonify({"status": "error", "message": f"시장지표 조회 중 오류 발생: {str(e)}"}), 500
+
 
 @app.route('/api/market-indicators/<category>', methods=['GET'])
 def get_market_indicators_by_category(category):
@@ -443,10 +356,7 @@ def get_market_indicators_by_category(category):
         valid_categories = ['interest_rates', 'stock_indices', 'exchange_rates']
         
         if category not in valid_categories:
-            return jsonify({
-                "status": "error", 
-                "message": f"유효하지 않은 카테고리입니다."
-            }), 400
+            return jsonify({"status": "error", "message": "유효하지 않은 카테고리입니다."}), 400
         
         indicators = format_market_indicators()
         
@@ -457,10 +367,8 @@ def get_market_indicators_by_category(category):
             "timestamp": datetime.now().isoformat()
         }), 200
     except Exception as e:
-        return jsonify({
-            "status": "error", 
-            "message": f"시장지표 조회 중 오류 발생: {str(e)}"
-        }), 500
+        return jsonify({"status": "error", "message": f"시장지표 조회 중 오류 발생: {str(e)}"}), 500
+
 
 @app.route('/api/market-indicators/summary', methods=['GET'])
 def get_market_indicators_summary():
@@ -468,41 +376,35 @@ def get_market_indicators_summary():
         indicators = format_market_indicators()
         summary_items = []
         
-        if indicators['interest_rates']:
-            for item in indicators['interest_rates']:
-                if '콜금리' in item['name']:
-                    summary_items.append({
-                        'name': '콜금리',
-                        'value': item['value'],
-                        'change': item['change'],
-                        'changePercent': item['changePercent'],
-                        'trend': item['trend']
-                    })
-                    break
+        # 콜금리
+        for item in indicators.get('interest_rates', []):
+            if '콜금리' in item['name']:
+                summary_items.append({
+                    'name': '콜금리', 'value': item['value'],
+                    'change': item['change'], 'changePercent': item['changePercent'],
+                    'trend': item['trend']
+                })
+                break
         
-        if indicators['exchange_rates']:
-            for item in indicators['exchange_rates']:
-                if 'USD/KRW' in item['name']:
-                    summary_items.append({
-                        'name': 'USD/KRW',
-                        'value': item['value'],
-                        'change': item['change'],
-                        'changePercent': item['changePercent'],
-                        'trend': item['trend']
-                    })
-                    break
+        # USD/KRW
+        for item in indicators.get('exchange_rates', []):
+            if 'USD/KRW' in item['name']:
+                summary_items.append({
+                    'name': 'USD/KRW', 'value': item['value'],
+                    'change': item['change'], 'changePercent': item['changePercent'],
+                    'trend': item['trend']
+                })
+                break
         
-        if indicators['stock_indices']:
-            for item in indicators['stock_indices']:
-                if 'KOSPI' in item['name']:
-                    summary_items.append({
-                        'name': 'KOSPI',
-                        'value': item['value'],
-                        'change': item['change'],
-                        'changePercent': item['changePercent'],
-                        'trend': item['trend']
-                    })
-                    break
+        # KOSPI
+        for item in indicators.get('stock_indices', []):
+            if 'KOSPI' in item['name']:
+                summary_items.append({
+                    'name': 'KOSPI', 'value': item['value'],
+                    'change': item['change'], 'changePercent': item['changePercent'],
+                    'trend': item['trend']
+                })
+                break
         
         return jsonify({
             "status": "success",
@@ -510,15 +412,13 @@ def get_market_indicators_summary():
             "timestamp": datetime.now().isoformat()
         }), 200
     except Exception as e:
-        return jsonify({
-            "status": "error", 
-            "message": f"시장지표 요약 조회 중 오류 발생: {str(e)}"
-        }), 500
+        return jsonify({"status": "error", "message": f"시장지표 요약 조회 중 오류 발생: {str(e)}"}), 500
+
 
 @app.route('/api/assets', methods=['GET'])
 def get_assets_endpoint():
     try:
-        asset_list = list(etf_master_collection.find({}, {'_id': 0}))
+        asset_list = list(db_manager.etf_master.find({}, {'_id': 0}))
         
         if not asset_list:
             return jsonify({"status": "error", "message": "ETF 데이터가 없습니다."}), 404
@@ -526,6 +426,7 @@ def get_assets_endpoint():
         return jsonify(asset_list), 200
     except Exception as e:
         return jsonify({"status": "error", "message": f"자산 목록 조회 중 오류: {str(e)}"}), 500
+
 
 @app.route('/api/etf/<ticker>/price', methods=['GET'])
 def get_etf_price_endpoint(ticker):
@@ -542,10 +443,11 @@ def get_etf_price_endpoint(ticker):
     except Exception as e:
         return jsonify({"status": "error", "message": f"가격 정보 조회 중 오류 발생: {str(e)}"}), 500
 
+
 @app.route('/api/etf/<ticker>/info', methods=['GET'])
 def get_etf_detail_info(ticker):
     try:
-        etf_info = etf_master_collection.find_one({
+        etf_info = db_manager.etf_master.find_one({
             '$or': [
                 {'단축코드': ticker},
                 {'ticker': ticker},
@@ -567,6 +469,7 @@ def get_etf_detail_info(ticker):
     except Exception as e:
         return jsonify({"status": "error", "message": f"ETF 정보 조회 중 오류 발생: {str(e)}"}), 500
 
+
 @app.route('/api/optimize', methods=['POST'])
 def optimize_endpoint():
     data = request.get_json()
@@ -577,22 +480,10 @@ def optimize_endpoint():
     params = data.get("optimization_params")
     mode = params.get("mode", "MVO")
     
-    # Beginner 모드는 asset_pairs 없이도 동작
     if mode != "Beginner" and "asset_pairs" not in data:
         return jsonify({"status": "error", "message": "'asset_pairs'가 필요합니다."}), 400
     
     asset_pairs = data.get("asset_pairs", [])
-    
-    print("\n" + "="*60)
-    print(f"🔥 받은 요청 데이터:")
-    print(f"  - mode: {mode}")
-    if mode == "Beginner":
-        print(f"  - style_index: {params.get('style_index')}")
-        print(f"  - risk_index: {params.get('risk_index')}")
-    else:
-        print(f"  - asset_pairs: {asset_pairs}")
-        print(f"  - optimization_params: {params}")
-    print("="*60 + "\n")
     
     try:
         selected_tickers, weights, performance = perform_portfolio_optimization(asset_pairs, params)
@@ -600,7 +491,7 @@ def optimize_endpoint():
         # ETF 상세 정보 추가
         etf_details = []
         for ticker in selected_tickers:
-            etf_info = etf_master_collection.find_one({'ticker': ticker}, {'_id': 0})
+            etf_info = db_manager.etf_master.find_one({'ticker': ticker}, {'_id': 0})
             if etf_info:
                 etf_details.append({
                     'ticker': ticker,
@@ -617,15 +508,14 @@ def optimize_endpoint():
             "performance": performance
         }
         
-        # Beginner 모드는 backtesting 제외
         if mode != "Beginner":
-            backtesting_results = backtester.run_backtest(weights)
-            result["backtesting"] = backtesting_results
+            result["backtesting"] = backtester.run_backtest(weights)
         
         return jsonify(result), 200
         
     except Exception as e:
         return jsonify({"status": "error", "message": f"포트폴리오 최적화 중 오류 발생: {str(e)}"}), 500
+
 
 @app.route('/api/risk-analysis', methods=['POST'])
 def calculate_comprehensive_risk_endpoint():
@@ -635,7 +525,7 @@ def calculate_comprehensive_risk_endpoint():
         return jsonify({"status": "error", "message": "'performance' 데이터가 필요합니다."}), 400
             
     performance = data.get("performance")
-    risk_free_rate = data.get("risk_free_rate", 0.02)
+    risk_free_rate = data.get("risk_free_rate", config.DEFAULT_RISK_FREE_RATE)
 
     try:
         annual_return = performance.get('expected_annual_return')
@@ -647,32 +537,23 @@ def calculate_comprehensive_risk_endpoint():
                 "message": "performance 데이터에 'expected_annual_return'과 'annual_volatility'가 필요합니다."
             }), 400
         
-        var_results = optimizer.ValueAtRisk(annual_return, annual_vol, risk_free_rate)
-        shortfall_results = optimizer.shortfallrisk(annual_return, annual_vol, risk_free_rate)
-        
         result = {
-            "value_at_risk": var_results,
-            "shortfall_risk": shortfall_results
+            "value_at_risk": optimizer.ValueAtRisk(annual_return, annual_vol, risk_free_rate),
+            "shortfall_risk": optimizer.shortfallrisk(annual_return, annual_vol, risk_free_rate)
         }
         
         return jsonify(result), 200
     except Exception as e:
-        import traceback
         traceback.print_exc()
         return jsonify({"status": "error", "message": f"종합 리스크 분석 중 서버 오류 발생: {e}"}), 500
 
+
 @app.route('/api/market-rankings/<category>', methods=['GET'])
 def get_market_rankings(category):
-    """
-    마켓 서머리 - MongoDB에서 사전 계산된 순위 조회
-    """
+    """마켓 서머리 - MongoDB에서 사전 계산된 순위 조회"""
     try:
-        # 쿼리 파라미터에서 timeframe 가져오기
         timeframe = request.args.get('timeframe', '1달')
         
-        print(f"📊 마켓 순위 요청: category={category}, timeframe={timeframe}")
-        
-        # 유효한 타임프레임인지 확인
         valid_timeframes = ['당일', '1주일', '1달', '3개월', '6개월', '1년', '3년']
         if timeframe not in valid_timeframes:
             return jsonify({
@@ -680,79 +561,126 @@ def get_market_rankings(category):
                 "message": f"유효하지 않은 타임프레임입니다. 가능한 값: {', '.join(valid_timeframes)}"
             }), 400
         
-        # 카테고리 검증
         if category not in ['asset', 'etf']:
             return jsonify({
                 "status": "error",
                 "message": "유효하지 않은 카테고리입니다. 'asset' 또는 'etf'를 사용하세요."
             }), 400
         
-        # MongoDB에서 사전 계산된 데이터 조회
-        market_summary_collection = etf_db['market_summary']
-        
-        summary_data = market_summary_collection.find_one(
-            {'timeframe': timeframe},
-            {'_id': 0}  # _id 필드 제외
+        summary_data = db_manager.market_summary.find_one(
+            {'timeframe': timeframe}, {'_id': 0}
         )
         
         if not summary_data:
-            print(f"❌ '{timeframe}' 타임프레임 데이터 없음")
             return jsonify({
                 "status": "error",
-                "message": f"'{timeframe}' 타임프레임의 데이터를 찾을 수 없습니다. 데이터 업데이트가 필요합니다."
+                "message": f"'{timeframe}' 타임프레임의 데이터를 찾을 수 없습니다."
             }), 404
         
-        print(f"✅ MongoDB에서 데이터 조회 성공")
-        
-        # 카테고리별 데이터 추출
         category_data = summary_data.get(category, {})
         
-        result = {
+        return jsonify({
             "status": "success",
             "category": category,
             "timeframe": timeframe,
             "updated_at": summary_data.get('updated_at').isoformat() if summary_data.get('updated_at') else None,
             "top": category_data.get('top', []),
             "bottom": category_data.get('bottom', [])
-        }
-        
-        print(f"✅ 응답 데이터: top={len(result['top'])}개, bottom={len(result['bottom'])}개")
-        
-        return jsonify(result), 200
+        }), 200
         
     except Exception as e:
-        print(f"❌ 마켓 순위 조회 오류: {e}")
-        import traceback
         traceback.print_exc()
+        return jsonify({"status": "error", "message": f"마켓 순위 조회 중 오류 발생: {str(e)}"}), 500
+
+
+# ============= 해외 배당 ETF 최적화 API =============
+
+@app.route('/api/dividend-optimize', methods=['POST'])
+def dividend_optimize_endpoint():
+    """
+    해외 배당 ETF 포트폴리오 최적화 API
+    
+    Request Body:
+        {
+            "alpha": 0.5,              # 성장/배당 균형 (0=배당, 1=성장)
+            "frequency": "any",        # 배당 주기 ('any', 'monthly', 'quarterly')
+            "initial_investment": 5000, # 초기 투자금 (만원)
+            "monthly_savings": 50       # 월 적립금 (만원)
+        }
+    """
+    try:
+        data = request.get_json() or {}
+        
+        alpha = float(data.get('alpha', 0.5))
+        frequency = data.get('frequency', 'any')
+        initial_investment = int(data.get('initial_investment', 5000))
+        monthly_savings = int(data.get('monthly_savings', 50))
+        
+        print(f"\n📊 [배당 최적화] alpha={alpha}, freq={frequency}, init={initial_investment}만원, monthly={monthly_savings}만원")
+        
+        # 1. 포트폴리오 최적화 (top_n=8: 최종 포트폴리오 종목 수, 200개 ETF 중 선별)
+        portfolio_result = dividend_optimizer.optimize_dividend_portfolio(
+            alpha=alpha,
+            frequency=frequency,
+            top_n=8,
+            initial_investment=initial_investment  # 만원 단위
+        )
+        
+        # 2. 30년 시뮬레이션
+        simulation_result = dividend_optimizer.simulate_30_year_growth(
+            initial_investment=initial_investment,
+            monthly_savings=monthly_savings,
+            portfolio_return=portfolio_result.get('portfolio_return', 8.0) / 100,
+            dividend_yield=portfolio_result.get('portfolio_yield', 4.0) / 100
+        )
+        
+        print(f"  ✅ 최적화 완료: {len(portfolio_result.get('portfolio', []))}개 ETF")
+        
         return jsonify({
-            "status": "error",
-            "message": f"마켓 순위 조회 중 오류 발생: {str(e)}"
-        }), 500
+            "status": "success",
+            "portfolio": portfolio_result.get('portfolio', []),
+            "monthly_dividends": portfolio_result.get('monthly_dividends', []),  # 수정: monthly_dividends
+            "simulation": {
+                "total_asset_30y": simulation_result.get('total_asset_30y'),
+                "total_principal": simulation_result.get('total_principal'),
+                "monthly_dividend": simulation_result.get('monthly_dividend'),
+            },
+            "metrics": {
+                "portfolio_yield": portfolio_result.get('portfolio_yield', 0),
+                "portfolio_return": portfolio_result.get('portfolio_return', 0),
+            },
+            "_mock": portfolio_result.get('_mock', False)
+        }), 200
+        
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": f"배당 최적화 중 오류 발생: {str(e)}"}), 500
+
+
+# ============= 메인 =============
 
 if __name__ == '__main__':
     print("=" * 60)
-    print("Flask 서버 시작 (순수 MongoDB 버전 - 파일 저장 없음)")
+    print("Flask 서버 시작 (리팩토링 버전 - 중앙화된 설정)")
     print("=" * 60)
     
     try:
         print("\n📡 MongoDB 연결 테스트...")
         
-        etf_count = etf_master_collection.count_documents({})
+        etf_count = db_manager.etf_master.count_documents({})
         print(f"  ✅ ETF 마스터 데이터: {etf_count}개")
         
-        fund_count = fund_prices_collection.count_documents({})
+        fund_count = db_manager.fund_prices.count_documents({})
         print(f"  ✅ ETF 가격 데이터: {fund_count}개")
         
-        ecos_count = ecos_prices_collection.count_documents({})
+        ecos_count = db_manager.ecos_prices.count_documents({})
         print(f"  ✅ ECOS 경제지표: {ecos_count}개")
         
         print("\n🚀 Flask 서버 시작...")
         print(f"📍 포트: 8000")
-        print(f"💾 로컬 파일 저장: ❌ (메모리에서만 처리)")
         print("=" * 60 + "\n")
         
         app.run(host='0.0.0.0', port=8000, debug=False, threaded=True)
     except Exception as e:
         print(f"\n❌ 서버 시작 실패: {e}")
-        import traceback
         traceback.print_exc()
