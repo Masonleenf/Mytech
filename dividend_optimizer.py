@@ -155,7 +155,7 @@ def optimize_dividend_portfolio_mvsk(
     frequency: str = 'any',
     top_n: int = 8,
     initial_investment: int = 5000,
-    universe_size: int = 50,  # Cloudtype 성능 이슈로 50 -> 30 축소 (MVSK O(N^4))
+    universe_size: int = 700,  # Cloudtype 성능 이슈로 50 -> 30 축소 (MVSK O(N^4))
     max_weight: float = 0.20,
     lambdas: tuple = (1.0, 2.0, 2.0)
 ) -> Dict:
