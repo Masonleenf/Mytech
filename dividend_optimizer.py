@@ -155,7 +155,7 @@ def optimize_dividend_portfolio_mvsk(
     frequency: str = 'any',
     top_n: int = 8,
     initial_investment: int = 5000,
-    universe_size: int = 50,  # MVSK는 O(N^4)이므로 50개로 제한
+    universe_size: int = 50,  # Cloudtype 성능 이슈로 50 -> 30 축소 (MVSK O(N^4))
     max_weight: float = 0.20,
     lambdas: tuple = (1.0, 2.0, 2.0)
 ) -> Dict:
@@ -331,7 +331,7 @@ def optimize_dividend_portfolio_simple(
     frequency: str = 'any',
     top_n: int = 8,
     initial_investment: int = 5000,
-    universe_size: int = 50
+    universe_size: int = 30
 ) -> Dict:
     """단순 스코어 기반 최적화 (MVSK 대체)"""
     raw_etf_list = get_dividend_etf_summary()
@@ -394,23 +394,24 @@ def optimize_dividend_portfolio(
     frequency: str = 'any',
     top_n: int = 8,
     initial_investment: int = 5000,
-    universe_size: int = 50  # MVSK O(N^4) 성능 위해 50개 제한
+    universe_size: int = 30  # Cloudtype 성능 이슈로 50 -> 30 축소
 ) -> Dict:
     """배당 포트폴리오 최적화 (MVSK 우선, 불가 시 단순 스코어)"""
-    if MVSK_AVAILABLE:
-        try:
-            return optimize_dividend_portfolio_mvsk(
-                alpha=alpha,
-                frequency=frequency,
-                top_n=top_n,
-                initial_investment=initial_investment,
-                universe_size=universe_size
-            )
-        except Exception as e:
-            print(f"⚠ MVSK 최적화 오류: {e}, 단순 스코어 방식 사용")
-    
+    # Cloudtype 성능 이슈로 인해 당분간 단순 스코어 방식(Weighted Avg) 사용
+    # if MVSK_AVAILABLE:
+    #     try:
+    #         return optimize_dividend_portfolio_mvsk(
+    #             alpha=alpha,
+    #             frequency=frequency,
+    #             top_n=top_n,
+    #             initial_investment=initial_investment,
+    #             universe_size=universe_size
+    #         )
+    #     except Exception as e:
+    #         print(f"⚠ MVSK 최적화 오류: {e}, 단순 스코어 방식 사용")
     
     # MVSK 사용 불가 또는 실패 시 단순 스코어 방식 사용
+    print("ℹ️ Cloudtype 안정성을 위해 단순 스코어 최적화 사용")
     result = optimize_dividend_portfolio_simple(
         alpha=alpha,
         frequency=frequency,
