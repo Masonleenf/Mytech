@@ -29,19 +29,39 @@ def get_dividend_etf_summary() -> List[Dict]:
 
 
 def get_market_data() -> Optional[pd.DataFrame]:
-    """MongoDB에서 시장 데이터(가격) 조회 - parquet 대신 DB사용"""
+    """MongoDB에서 시장 데이터(가격) 조회"""
     try:
-        # dividen_model의 data/market_data.parquet 파일 경로
-        parquet_path = "/Volumes/X31/github/Fundplatter/dividen_model/gsheet/data/market_data.parquet"
-        if os.path.exists(parquet_path):
-            df = pd.read_parquet(parquet_path)
-            if isinstance(df.columns, pd.MultiIndex):
-                if 'Adj Close' in df.columns.get_level_values(1):
-                    return df.xs('Adj Close', axis=1, level=1)
-                elif 'Close' in df.columns.get_level_values(1):
-                    return df.xs('Close', axis=1, level=1)
-            return df
-        return None
+        # MongoDB에서 가격 데이터 조회
+        cursor = db_manager.dividend_etf_prices.find({}, {'_id': 0})
+        docs = list(cursor)
+        
+        if not docs:
+            print("⚠ MongoDB에 가격 데이터 없음")
+            return None
+        
+        # DataFrame 변환 (ticker별 Close 가격)
+        price_data = {}
+        for doc in docs:
+            ticker = doc.get('ticker')
+            prices = doc.get('prices', [])
+            if ticker and prices:
+                df = pd.DataFrame(prices)
+                df['Date'] = pd.to_datetime(df['Date'])
+                df = df.set_index('Date').sort_index()
+                # Adj Close 우선, 없으면 Close 사용
+                if 'Adj Close' in df.columns:
+                    price_data[ticker] = df['Adj Close']
+                elif 'Close' in df.columns:
+                    price_data[ticker] = df['Close']
+        
+        if not price_data:
+            print("⚠ 유효한 가격 데이터 없음")
+            return None
+        
+        result_df = pd.DataFrame(price_data)
+        print(f"📊 마켓 데이터 로드: {len(result_df)}일, {len(result_df.columns)}개 티커")
+        return result_df
+        
     except Exception as e:
         print(f"❌ 마켓 데이터 로드 실패: {e}")
         return None

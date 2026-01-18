@@ -26,8 +26,12 @@ jobs:
       - name: Run ETF data manager script
         run: python data_manager.py
         
+      - name: Run Dividend ETF data manager script
+        run: python dividend_data_manager.py --update-prices
+        
       - name: Data update completed
         run: |
           echo "✅ MongoDB data update completed successfully!"
           echo "📊 ECOS data stored in MongoDB"
           echo "📈 ETF data processed"
+          echo "💰 Dividend ETF prices updated"

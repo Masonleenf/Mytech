@@ -836,5 +836,83 @@ class FinancialDataManager:
 
 
 if __name__ == "__main__":
-    manager = FinancialDataManager()
-    manager.run_full_pipeline()
+    import sys
+    from db import db_manager
+    
+    # CLI 인자 처리
+    if len(sys.argv) > 1 and sys.argv[1] == '--update-prices':
+        # MongoDB 업데이트 모드
+        print("=" * 60)
+        print("📊 해외 배당 ETF 데이터 MongoDB 업데이트")
+        print("=" * 60)
+        
+        # 1. etf_summary.json → dividend_etf_summary
+        summary_path = 'dividend_data/etf_summary.json'
+        if os.path.exists(summary_path):
+            print(f"\n[1/2] {summary_path} → dividend_etf_summary...")
+            with open(summary_path, 'r', encoding='utf-8') as f:
+                summary_data = json.load(f)
+            
+            # 컬렉션 비우고 새로 삽입
+            db_manager.dividend_etf_summary.delete_many({})
+            if summary_data:
+                db_manager.dividend_etf_summary.insert_many(summary_data)
+            print(f"   ✅ {len(summary_data)}개 ETF 정보 업로드 완료")
+        else:
+            print(f"   ⚠️ {summary_path} 파일 없음")
+        
+        # 2. market_data.parquet → dividend_etf_prices
+        parquet_path = 'dividend_data/market_data.parquet'
+        if os.path.exists(parquet_path):
+            print(f"\n[2/2] {parquet_path} → dividend_etf_prices...")
+            df = pd.read_parquet(parquet_path)
+            
+            # MultiIndex 처리
+            if isinstance(df.columns, pd.MultiIndex):
+                # 티커별 가격 데이터 추출
+                tickers = df.columns.get_level_values(0).unique()
+                
+                db_manager.dividend_etf_prices.delete_many({})
+                uploaded = 0
+                
+                for ticker in tickers:
+                    try:
+                        ticker_data = df[ticker].copy()
+                        if 'Adj Close' in ticker_data.columns:
+                            prices = ticker_data[['Adj Close', 'Close']].dropna(how='all')
+                        elif 'Close' in ticker_data.columns:
+                            prices = ticker_data[['Close']].dropna(how='all')
+                        else:
+                            continue
+                        
+                        if prices.empty:
+                            continue
+                        
+                        prices = prices.reset_index()
+                        prices['Date'] = prices['Date'].dt.strftime('%Y-%m-%d')
+                        prices_list = prices.to_dict('records')
+                        
+                        doc = {
+                            'ticker': ticker,
+                            'prices': prices_list,
+                            'updated_at': datetime.now()
+                        }
+                        db_manager.dividend_etf_prices.insert_one(doc)
+                        uploaded += 1
+                        
+                    except Exception as e:
+                        print(f"   ⚠️ {ticker} 처리 오류: {e}")
+                
+                print(f"   ✅ {uploaded}개 ETF 가격 데이터 업로드 완료")
+            else:
+                print("   ⚠️ MultiIndex 형식이 아닙니다")
+        else:
+            print(f"   ⚠️ {parquet_path} 파일 없음")
+        
+        print("\n" + "=" * 60)
+        print("✅ MongoDB 업데이트 완료!")
+        print("=" * 60)
+    else:
+        # 기본 모드: 전체 파이프라인 실행
+        manager = FinancialDataManager(output_dir='dividend_data')
+        manager.run_full_pipeline()
