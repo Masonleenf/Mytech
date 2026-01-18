@@ -28,11 +28,20 @@ def get_dividend_etf_summary() -> List[Dict]:
         return []
 
 
-def get_market_data() -> Optional[pd.DataFrame]:
-    """MongoDB에서 시장 데이터(가격) 조회"""
+def get_market_data(ticker_list: Optional[List[str]] = None) -> Optional[pd.DataFrame]:
+    """MongoDB에서 시장 데이터(가격) 조회
+    
+    Args:
+        ticker_list: 조회할 티커 리스트 (None이면 전체 조회)
+    """
     try:
+        query = {}
+        if ticker_list:
+            query = {'ticker': {'$in': ticker_list}}
+            print(f"🔍 선별된 {len(ticker_list)}개 티커의 가격 데이터만 조회합니다.")
+
         # MongoDB에서 가격 데이터 조회
-        cursor = db_manager.dividend_etf_prices.find({}, {'_id': 0})
+        cursor = db_manager.dividend_etf_prices.find(query, {'_id': 0})
         docs = list(cursor)
         
         if not docs:
@@ -45,14 +54,22 @@ def get_market_data() -> Optional[pd.DataFrame]:
             ticker = doc.get('ticker')
             prices = doc.get('prices', [])
             if ticker and prices:
+                # 데이터가 비어있지 않은지 확인
+                if not prices:
+                    continue
+                    
                 df = pd.DataFrame(prices)
-                df['Date'] = pd.to_datetime(df['Date'])
-                df = df.set_index('Date').sort_index()
-                # Adj Close 우선, 없으면 Close 사용
-                if 'Adj Close' in df.columns:
-                    price_data[ticker] = df['Adj Close']
-                elif 'Close' in df.columns:
-                    price_data[ticker] = df['Close']
+                
+                # 날짜 형식 처리
+                if 'Date' in df.columns:
+                    df['Date'] = pd.to_datetime(df['Date'])
+                    df = df.set_index('Date').sort_index()
+                    
+                    # Adj Close 우선, 없으면 Close 사용
+                    if 'Adj Close' in df.columns:
+                        price_data[ticker] = df['Adj Close']
+                    elif 'Close' in df.columns:
+                        price_data[ticker] = df['Close']
         
         if not price_data:
             print("⚠ 유효한 가격 데이터 없음")
@@ -153,37 +170,53 @@ def optimize_dividend_portfolio_mvsk(
     raw_etf_list = get_dividend_etf_summary()
     if not raw_etf_list:
         return _get_mock_result(alpha, frequency, initial_investment)
-    
-    # 2. 마켓 데이터(가격) 로드
-    price_df = get_market_data()
-    if price_df is None:
-        print("⚠ 마켓 데이터 없음, 단순 스코어 방식 사용")
-        return optimize_dividend_portfolio_simple(alpha, frequency, top_n, initial_investment, universe_size)
-    
-    # 3. ETF 데이터 변환
+
+    # 2. ETF 데이터 1차 필터링 (메타데이터 기반)
     etf_list = [_get_etf_data(etf) for etf in raw_etf_list]
     dividend_etfs = [e for e in etf_list if e['dividend_yield'] > 0]
     filtered_etfs = filter_etfs_by_frequency(dividend_etfs, frequency)
     
     if len(filtered_etfs) < 5:
         return _get_mock_result(alpha, frequency, initial_investment)
-    
-    # 4. 유니버스 필터링 (스코어 기반 상위 N개)
+
+    # 3. 유니버스 필터링 (스코어 기반 상위 N개 선정)
+    # 전체 데이터를 다 로드하지 않고, 먼저 유망한 후보군을 추립니다.
     for etf in filtered_etfs:
         etf['_score'] = calculate_portfolio_score(etf, alpha)
-    sorted_etfs = sorted(filtered_etfs, key=lambda x: x.get('_score', 0), reverse=True)
-    universe_etfs = sorted_etfs[:universe_size]
     
-    # 5. 가격 데이터와 매칭되는 티커만 사용
+    sorted_etfs = sorted(filtered_etfs, key=lambda x: x.get('_score', 0), reverse=True)
+    
+    # MVSK 계산을 위해 넉넉하게 universe_size의 2배수 정도까지 데이터를 가져와 봅니다.
+    # (가격 데이터가 없는 경우 탈락할 수 있으므로)
+    candidate_size = min(len(sorted_etfs), universe_size * 2) 
+    candidate_etfs = sorted_etfs[:candidate_size]
+    candidate_tickers = [etf['ticker'] for etf in candidate_etfs]
+    
+    print(f"  🔍 분석 대상 후보: {len(candidate_tickers)}개")
+
+    # 4. 선별된 후보들의 마켓 데이터(가격)만 로드
+    price_df = get_market_data(ticker_list=candidate_tickers)
+    
+    if price_df is None:
+        print("⚠ 마켓 데이터 없음, 단순 스코어 방식 사용")
+        return optimize_dividend_portfolio_simple(alpha, frequency, top_n, initial_investment, universe_size)
+    
+    # 5. 가격 데이터와 매칭되는 티커만 최종 유니버스로 확정
     valid_tickers = []
     ticker_to_etf = {}
-    for etf in universe_etfs:
+    universe_etfs = []
+    
+    for etf in candidate_etfs:
         ticker = etf['ticker']
         if ticker in price_df.columns:
             valid_tickers.append(ticker)
             ticker_to_etf[ticker] = etf
+            universe_etfs.append(etf)
+            
+            if len(valid_tickers) >= universe_size:
+                break
     
-    print(f"  유효 티커: {len(valid_tickers)}개 (가격 데이터 매칭)")
+    print(f"  ✅ 유효 티커: {len(valid_tickers)}개 (가격 데이터 매칭)")
     
     if len(valid_tickers) < 5:
         print("⚠ 가격 데이터 부족, 단순 스코어 방식 사용")
@@ -196,10 +229,10 @@ def optimize_dividend_portfolio_mvsk(
     returns_df = price_subset.pct_change().dropna()
     returns_df = returns_df.dropna(axis=1, how='any')
     
-    # 티커 리스트 업데이트
+    # 티커 리스트 업데이트 (수익률 계산 과정에서 NaN 등으로 탈락한 경우 반영)
     valid_tickers = list(returns_df.columns)
     
-    print(f"  수익률 데이터: {len(returns_df)}일, {len(valid_tickers)}개 자산")
+    print(f"  📈 수익률 데이터: {len(returns_df)}일, {len(valid_tickers)}개 자산")
     
     # 7. 배당 수익률 배열 준비
     dividend_yields = []
