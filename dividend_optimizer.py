@@ -10,12 +10,18 @@ from datetime import datetime
 from db import db_manager
 
 # MVSK 최적화 모듈 임포트
+import traceback
+
+MVSK_IMPORT_ERROR = None
 try:
     from mvsk_optimizer import MVSKOptimizer, MomentCalculator, print_optimization_report
     MVSK_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     MVSK_AVAILABLE = False
-    print("⚠ MVSK optimizer not available, using simple scoring")
+    MVSK_IMPORT_ERROR = str(e)
+    # 전체 트레이스백 출력
+    traceback.print_exc()
+    print(f"⚠ MVSK optimizer not available: {e}")
 
 
 def get_dividend_etf_summary() -> List[Dict]:
@@ -403,13 +409,22 @@ def optimize_dividend_portfolio(
         except Exception as e:
             print(f"⚠ MVSK 최적화 오류: {e}, 단순 스코어 방식 사용")
     
-    return optimize_dividend_portfolio_simple(
+    
+    # MVSK 사용 불가 또는 실패 시 단순 스코어 방식 사용
+    result = optimize_dividend_portfolio_simple(
         alpha=alpha,
         frequency=frequency,
         top_n=top_n,
         initial_investment=initial_investment,
         universe_size=universe_size
     )
+    
+    # 디버그 정보 추가
+    if not MVSK_AVAILABLE:
+        result['_debug_mvsk_error'] = MVSK_IMPORT_ERROR
+        print(f"⚠ MVSK 비활성화 원인: {MVSK_IMPORT_ERROR}")
+        
+    return result
 
 
 def _calculate_monthly_dividends(portfolio: List[Dict], initial_investment: int) -> List[float]:
